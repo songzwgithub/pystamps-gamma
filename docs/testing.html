@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Testing - pySTAMPS Docs</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script defer src="assets/scripts.js"></script>
+</head>
+<body>
+<div class="site">
+  <aside class="sidebar">
+    <div class="logo"><img class="brand-logo" src="assets/pystamps-logo.svg" alt="pySTAMPS logo" /><h1>pySTAMPS Docs</h1></div>
+    <small>Testing Guide</small>
+    <nav>
+      <div class="nav-group"><h2>Guide</h2><ul class="nav-list"><li><a href="index.html">Introduction</a></li><li><a href="stages.html">Stages and Code Paths</a></li><li><a href="pipeline-science-guide.html">Pipeline Guide</a></li><li><a href="getting-started.html">Getting Started</a></li><li><a href="installation.html">Installation</a></li><li><a href="quickstart.html">Quick Start</a></li><li><a href="native-cli.html">Native Rust CLI</a></li><li><a href="architecture.html">Architecture</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="usage.html">Usage</a></li><li><a class="active" href="testing.html">Testing</a></li><li><a href="verification.html">Verification</a></li><li><a href="contributing.html">Contributing</a></li><li><a href="faq.html">FAQ</a></li></ul></div>
+      <div class="nav-group"><h2>API</h2><ul class="nav-list"><li><a href="api/pystamps.html">Package</a></li><li><a href="api/configuration.html">config</a></li><li><a href="api/cli.html">cli</a></li><li><a href="api/status.html">status</a></li><li><a href="api/verify.html">verify</a></li><li><a href="api/parity_contract.html">parity_contract</a></li><li><a href="api/io_dataset.html">io.dataset</a></li><li><a href="api/io_mat.html">io.mat</a></li><li><a href="api/runtime.html">runtime</a></li><li><a href="api/kernels.html">kernels</a></li><li><a href="api/pipeline_types.html">pipeline.types</a></li><li><a href="api/pipeline_stages.html">pipeline.stages</a></li><li><a href="api/pipeline_ported.html">pipeline.ported</a></li><li><a href="api/compat_legacy.html">compat.legacy</a></li></ul></div>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home / Testing</div>
+    <h1>Testing</h1>
+
+    <section class="card">
+      <h2>Main validation commands</h2>
+      <p>Use these gates for normal development and native Rust work.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">cargo test --workspace</code></pre>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pytest -q tests/test_kernels_accelerated.py</code></pre>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">make native-full-chain-verify</code></pre>
+      <p>The native full-chain gate uses the checked-in performance budget manifest and accepts <span class="code-inline">THREADS=N</span> when you need fixed CPU limits.</p>
+    </section>
+
+    <section class="card">
+      <h2>Test structure</h2>
+      <ul>
+        <li>Rust workspace tests cover the native CLI, planning, stage helpers, and shared Rust crates.</li>
+        <li>The accelerated kernel pytest target covers native/Python kernel behavior without running the whole dataset chain.</li>
+        <li>Dataset-backed native parity validation is handled by <span class="code-inline">make native-full-chain-verify</span>.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Coverage</h2>
+      <p>For VM reproduction, build <span class="code-inline">target/release/pystamps-native</span> first, then run the native gate. Override paths only when needed.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">cargo build --release -p pystamps-core --bin pystamps-native
+make native-full-chain-verify \
+  DATASET=/path/to/source_dataset \
+  GOLDEN=/path/to/reference_dataset \
+  RUN=/path/to/clean_run_dataset \
+  THREADS=8</code></pre>
+      <p>Inspect <span class="code-inline">RUN/_native_gate_reports/</span> when the gate fails.</p>
+    </section>
+
+    <section class="card">
+      <h2>Validation workflow</h2>
+      <p>Run the web console only when changing <span class="code-inline">crates/pystamps-web</span>.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">make web</code></pre>
+      <p>Build Python distributions only for packaging work, and avoid committing generated <span class="code-inline">dist/</span> artifacts during normal implementation.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">make build</code></pre>
+  </section>
+  </main>
+</div>
+</body>
+</html>

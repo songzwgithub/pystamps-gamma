@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Architecture - pySTAMPS Docs</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script defer src="assets/scripts.js"></script>
+</head>
+<body>
+<div class="site">
+  <aside class="sidebar">
+    <div class="logo"><img class="brand-logo" src="assets/pystamps-logo.svg" alt="pySTAMPS logo" /><h1>pySTAMPS Docs</h1></div>
+    <small>System structure, module roles, and data flow.</small>
+    <nav>
+      <div class="nav-group"><h2>Guide</h2><ul class="nav-list"><li><a href="index.html">Introduction</a></li><li><a href="stages.html">Stages and Code Paths</a></li><li><a href="pipeline-science-guide.html">Pipeline Guide</a></li><li><a href="getting-started.html">Getting Started</a></li><li><a href="installation.html">Installation</a></li><li><a href="quickstart.html">Quick Start</a></li><li><a href="native-cli.html">Native Rust CLI</a></li><li><a class="active" href="architecture.html">Architecture</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="usage.html">Usage</a></li><li><a href="testing.html">Testing</a></li><li><a href="verification.html">Verification</a></li><li><a href="contributing.html">Contributing</a></li><li><a href="faq.html">FAQ</a></li></ul></div>
+      <div class="nav-group"><h2>Reference</h2><ul class="nav-list"><li><a href="function-reference.html">Function Reference</a></li><li><a href="api/pystamps.html">Package API</a></li><li><a href="api/pipeline_stages.html">pipeline.stages</a></li><li><a href="api/pipeline_ported.html">pipeline.ported</a></li><li><a href="api/kernels.html">kernels</a></li></ul></div>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home / Architecture</div>
+
+    <section class="hero">
+      <span class="badge">System map</span>
+      <h1>pySTAMPS is organized around the dataset directory as the source of truth.</h1>
+      <p>The CLI, runtime scheduler, ported stages, optimized kernels, and verification tools all read from or write to the same StaMPS-style dataset tree.</p>
+      <div class="hero-actions">
+        <a class="button-link" href="stages.html">Read stage code paths</a>
+        <a class="button-link secondary" href="pipeline-science-guide.html">Read science guide</a>
+        <a class="button-link secondary" href="function-reference.html">Open function reference</a>
+      </div>
+    </section>
+
+    <section class="diagram-card">
+      <h2>Capability Map</h2>
+      <p>The architecture splits user interfaces, dataset state, stage orchestration, native Rust execution, verification, and the local web console into separate responsibilities.</p>
+      <img class="doc-figure" src="assets/pystamps-capabilities.svg" alt="pySTAMPS architecture capability map" />
+    </section>
+
+    <section class="card">
+      <h2>Runtime layers</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Main modules</th><th>Responsibility</th></tr></thead>
+          <tbody>
+            <tr><td>CLI</td><td><code>pystamps.cli</code></td><td>Parse commands, load config, print JSON reports.</td></tr>
+            <tr><td>Configuration</td><td><code>pystamps.config</code></td><td>Normalize runtime, kernel, tolerance, tool, and compatibility settings.</td></tr>
+            <tr><td>Dataset I/O</td><td><code>pystamps.io.dataset</code>, <code>pystamps.io.mat</code></td><td>Discover patches and read/write MATLAB-compatible artifacts.</td></tr>
+            <tr><td>Pipeline orchestration</td><td><code>pystamps.pipeline.stages</code></td><td>Select stages, skip existing artifacts, schedule patch or merged work.</td></tr>
+            <tr><td>Scientific stages</td><td><code>pystamps.pipeline.ported</code></td><td>Implement StaMPS-style stage behavior in Python.</td></tr>
+            <tr><td>Kernels</td><td><code>pystamps.kernels</code></td><td>Dispatch hot numerical kernels to Python, native Rust/CPU, or CUDA providers.</td></tr>
+            <tr><td>Native Rust core</td><td><code>crates/pystamps-core</code></td><td>Plan native runs, own the <code>pystamps-native</code> CLI, execute native stages, and report coverage.</td></tr>
+            <tr><td>Native stage registry</td><td><code>crates/pystamps-stages</code></td><td>Record stage-scope readiness and parity certification status.</td></tr>
+            <tr><td>Rust MAT support</td><td><code>crates/pystamps-mat</code></td><td>Write MATLAB v5 artifacts from Rust-owned stage code.</td></tr>
+            <tr><td>Rust web console</td><td><code>crates/pystamps-web</code></td><td>Serve the local run console and native coverage API.</td></tr>
+            <tr><td>Verification</td><td><code>pystamps.verify</code>, <code>scripts/validate_audit.py</code></td><td>Compare outputs against golden datasets and audit manifests.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Pipeline model</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Stage</th><th>Scope</th><th>Pipeline name</th><th>Expected progress artifact</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Patch</td><td>Initial load</td><td><code>PATCH_*/ps1.mat</code></td></tr>
+            <tr><td>2</td><td>Patch</td><td>Estimate gamma</td><td><code>PATCH_*/pm1.mat</code></td></tr>
+            <tr><td>3</td><td>Patch</td><td>Select PS pixels</td><td><code>PATCH_*/select1.mat</code></td></tr>
+            <tr><td>4</td><td>Patch</td><td>Weed adjacent pixels</td><td><code>PATCH_*/weed1.mat</code></td></tr>
+            <tr><td>5</td><td>Patch and merged</td><td>Correct phase and merge</td><td><code>PATCH_*/ph2.mat</code>, root <code>ifgstd2.mat</code></td></tr>
+            <tr><td>6</td><td>Merged</td><td>Unwrap phase</td><td>root <code>phuw2.mat</code></td></tr>
+            <tr><td>7</td><td>Merged</td><td>Calculate SCLA</td><td>root <code>scla2.mat</code></td></tr>
+            <tr><td>8</td><td>Merged</td><td>Filter SCN</td><td>root <code>uw_space_time.mat</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout info">Patch-scoped stages run once per discovered <span class="code-inline">PATCH_*</span> directory. Merged stages run once at the dataset root. For implementation details by stage, use <a href="stages.html">Stages and Code Paths</a>.</div>
+    </section>
+
+    <section class="card">
+      <h2>Artifact-driven scheduling</h2>
+      <p>Before running a stage, <span class="code-inline">pystamps.pipeline.stages</span> checks the expected artifact or merged stage bundle. If the artifacts already exist, the result status is <span class="code-inline">skipped_existing</span>.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>planned</code></td><td>Dry-run selected the stage but did not execute it.</td></tr>
+            <tr><td><code>completed</code></td><td>Stage executed or strict reference replay copied the expected bundle.</td></tr>
+            <tr><td><code>skipped_existing</code></td><td>Expected artifacts were already present.</td></tr>
+            <tr><td><code>skipped</code></td><td>No artifact mapping exists for that scope.</td></tr>
+            <tr><td><code>failed</code></td><td>Stage raised an execution error.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Backend and kernel architecture</h2>
+      <p>pySTAMPS separates runtime scheduling from numerical kernel selection. Runtime settings control thread/process/GPU-oriented scheduling. Kernel settings choose the reference Python implementation, compiled native Rust/CPU implementation, or CUDA provider where available.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps describe-backends</code></pre>
+      <div class="quick-links">
+        <div class="highlight-card"><h3>Runtime backends</h3><p><span class="code-inline">auto</span>, <span class="code-inline">threads</span>, <span class="code-inline">processes</span>, <span class="code-inline">gpu</span>, <span class="code-inline">native</span>.</p></div>
+        <div class="highlight-card"><h3>Kernel backends</h3><p><span class="code-inline">python</span>, <span class="code-inline">native</span>, <span class="code-inline">cuda</span>, <span class="code-inline">auto</span>.</p></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Optimized kernels</h2>
+      <ul>
+        <li><span class="code-inline">stage2_grid_accumulate</span></li>
+        <li><span class="code-inline">stage2_histogram</span></li>
+        <li><span class="code-inline">stage2_topofit</span></li>
+        <li><span class="code-inline">stage2_topofit_row_invariant</span></li>
+        <li><span class="code-inline">stage2_topofit_coh_row_invariant</span></li>
+        <li><span class="code-inline">stage4_edge_stats</span></li>
+        <li><span class="code-inline">stage7_scla</span></li>
+        <li><span class="code-inline">stage8_edge_noise</span></li>
+      </ul>
+      <pre><button class="copy-btn">Copy</button><code class="language-yaml">runtime:
+  backend: auto
+  stage2_kernel_backend: native
+  stage2_native_threads: 0
+  kernel_backend_overrides:
+    stage2_grid_accumulate: native
+    stage2_histogram: native
+    stage2_topofit: native
+    stage2_topofit_row_invariant: native
+    stage2_topofit_coh_row_invariant: native
+    stage4_edge_stats: native
+    stage7_scla: native
+    stage8_edge_noise: native
+  io_workers: 8
+  cpu_workers: 0
+  stage7_chunk_ps: 100000
+  stage8_chunk_edges: 200000</code></pre>
+    </section>
+
+    <section class="diagram-card">
+      <h2>Workflow Graph</h2>
+      <p>This graph focuses on the command flow around <span class="code-inline">status</span>, <span class="code-inline">run</span>, <span class="code-inline">verify</span>, and native gate reports.</p>
+      <img class="doc-figure" src="assets/pystamps-workflow.svg" alt="pySTAMPS status, dry-run, execution, and verification workflow graph" />
+    </section>
+
+    <section class="card">
+      <h2>Verification architecture</h2>
+      <p>Single-run verification compares one run tree to one golden tree. Full parity audit is handled by <span class="code-inline">make audit</span> and reads the maintained manifest.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps verify --run RUN_DIR --golden GOLDEN_DIR
+make audit</code></pre>
+      <p>The audit dataset list is owned by <span class="code-inline">pystamps/data/audited_workflow_manifest.json</span>. Oracle precedence is owned by <span class="code-inline">pystamps/data/oracle_contract.json</span>.</p>
+    </section>
+
+    <section class="card">
+      <h2>Practical boundaries</h2>
+      <ul>
+        <li>The package implements stages 1 through 8 in <span class="code-inline">pystamps.pipeline.ported</span>.</li>
+        <li>The native Rust CLI owns parity-certified stage scopes across stages 1 through 8 plus Stage-5 merged aggregation.</li>
+        <li>The optimized Python extension accelerates selected hot kernels, while the Rust CLI can execute the full native chain directly.</li>
+        <li>External tools such as <span class="code-inline">triangle</span> and <span class="code-inline">snaphu</span> remain relevant for non-native fallback workflows.</li>
+        <li>Parity should be claimed from <span class="code-inline">verify</span> or audit evidence, not from command completion alone.</li>
+        <li>Speed should be claimed from <span class="code-inline">make benchmark</span> or <span class="code-inline">scripts/benchmark_backends.py</span>, not from a skipped pipeline run.</li>
+      </ul>
+    </section>
+  </main>
+</div>
+</body>
+</html>

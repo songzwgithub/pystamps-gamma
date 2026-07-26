@@ -1,0 +1,34 @@
+[package]
+name = "pystamps_stage2_native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+members = [
+    ".",
+    "crates/pystamps-core",
+    "crates/pystamps-mat",
+    "crates/pystamps-parity",
+    "crates/pystamps-stages",
+    "crates/pystamps-web",
+]
+resolver = "2"
+
+[lib]
+name = "_stage2_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+num-complex = "0.4"
+numpy = "0.28"
+pyo3 = { version = "0.28", features = ["extension-module"] }
+rayon = "1.10"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+
+[patch.crates-io]
+rust-hdf5 = { path = "crates/rust-hdf5" }

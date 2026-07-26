@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Configuration - pySTAMPS Docs</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script defer src="assets/scripts.js"></script>
+</head>
+<body>
+<div class="site">
+  <aside class="sidebar">
+    <div class="logo"><img class="brand-logo" src="assets/pystamps-logo.svg" alt="pySTAMPS logo" /><h1>pySTAMPS Docs</h1></div>
+    <small>Configuration Reference</small>
+    <nav>
+      <div class="nav-group"><h2>Guide</h2><ul class="nav-list"><li><a href="index.html">Introduction</a></li><li><a href="stages.html">Stages and Code Paths</a></li><li><a href="pipeline-science-guide.html">Pipeline Guide</a></li><li><a href="getting-started.html">Getting Started</a></li><li><a href="installation.html">Installation</a></li><li><a href="quickstart.html">Quick Start</a></li><li><a href="native-cli.html">Native Rust CLI</a></li><li><a href="architecture.html">Architecture</a></li><li><a class="active" href="configuration.html">Configuration</a></li><li><a href="usage.html">Usage</a></li><li><a href="testing.html">Testing</a></li><li><a href="verification.html">Verification</a></li><li><a href="contributing.html">Contributing</a></li><li><a href="faq.html">FAQ</a></li></ul></div>
+      <div class="nav-group"><h2>API</h2><ul class="nav-list"><li><a href="api/pystamps.html">Package</a></li><li><a href="api/configuration.html">config</a></li><li><a href="api/cli.html">cli</a></li><li><a href="api/status.html">status</a></li><li><a href="api/verify.html">verify</a></li><li><a href="api/parity_contract.html">parity_contract</a></li><li><a href="api/io_dataset.html">io.dataset</a></li><li><a href="api/io_mat.html">io.mat</a></li><li><a href="api/runtime.html">runtime</a></li><li><a href="api/kernels.html">kernels</a></li><li><a href="api/pipeline_types.html">pipeline.types</a></li><li><a href="api/pipeline_stages.html">pipeline.stages</a></li><li><a href="api/pipeline_ported.html">pipeline.ported</a></li><li><a href="api/compat_legacy.html">compat.legacy</a></li></ul></div>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home / Configuration</div>
+    <h1>Configuration</h1>
+
+    <section class="card">
+      <h2>Configuration file format</h2>
+      <p>pySTAMPS supports YAML and JSON files. If <span class="code-inline">--config</span> is omitted, defaults are used.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-yaml">runtime:
+  io_workers: 8
+  cpu_workers: 0
+  backend: auto
+  stage2_kernel_backend: auto
+  stage2_patch_backend_overrides: {}
+  kernel_backend_overrides: {}
+  stage2_native_threads: 0
+  stage7_chunk_ps: 100000
+  stage8_chunk_edges: 200000
+  enable_mat_stage_cache: true
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1
+  stage2_debug: false
+  stage4_debug: false
+
+tolerance:
+  rtol: 1e-5
+  atol: 1e-7
+  wrap_equivalence: true
+  wrap_period: 6.283185307179586
+  wrap_keys:
+    - ph_uw
+    - ph
+    - dph_noise
+    - dph_space_uw
+
+tools:
+  triangle: triangle
+  snaphu: snaphu
+
+compat:
+  strict_reference: false
+  reference_root: null
+</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Optimized kernel selection</h2>
+      <p>Use <span class="code-inline">pystamps describe-backends</span> to inspect the providers registered on the current machine. The main kernel backend names are <span class="code-inline">python</span>, <span class="code-inline">native</span>, and <span class="code-inline">cuda</span>.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps describe-backends</code></pre>
+      <p>To require the Rust/CPU kernels where they are available:</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-yaml">runtime:
+  backend: auto
+  stage2_kernel_backend: native
+  stage2_native_threads: 0
+  kernel_backend_overrides:
+    stage2_grid_accumulate: native
+    stage2_histogram: native
+    stage2_topofit: native
+    stage2_topofit_row_invariant: native
+    stage2_topofit_coh_row_invariant: native
+    stage4_edge_stats: native
+    stage7_scla: native
+    stage8_edge_noise: native
+  io_workers: 8
+  cpu_workers: 0
+  stage7_chunk_ps: 100000
+  stage8_chunk_edges: 200000</code></pre>
+      <ul>
+        <li><span class="code-inline">runtime.backend</span> accepts <span class="code-inline">auto</span>, <span class="code-inline">threads</span>, <span class="code-inline">processes</span>, <span class="code-inline">gpu</span>, or <span class="code-inline">native</span>.</li>
+        <li><span class="code-inline">stage2_kernel_backend</span> accepts <span class="code-inline">auto</span>, <span class="code-inline">python</span>, or <span class="code-inline">native</span>.</li>
+        <li><span class="code-inline">kernel_backend_overrides</span> pins individual kernels without changing the rest of the runtime.</li>
+        <li><span class="code-inline">stage2_native_threads: 0</span> lets pySTAMPS use the detected CPU budget for each stage-2 patch.</li>
+        <li>Use <span class="code-inline">python</span> overrides when you need the reference path for parity debugging.</li>
+        <li>Stages whose expected artifacts already exist are skipped; use an incomplete run copy or benchmark script when you need to time actual kernel execution.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Environment variables</h2>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Variable</th><th>Effect</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><span class="code-inline">STAMPS_ROOT</span></td><td>Fallback for <span class="code-inline">list-legacy</span> when flag is missing</td><td>(none)</td></tr>
+          <tr><td><span class="code-inline">PATH</span></td><td>Used for legacy binaries such as <span class="code-inline">triangle</span>/<span class="code-inline">snaphu</span> when external workflows invoke them</td><td>system default</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Config precedence and defaults</h2>
+      <ul>
+        <li>Default values come from dataclass defaults in <span class="code-inline">RuntimeConfig</span>, <span class="code-inline">ToleranceConfig</span>, <span class="code-inline">ExternalToolsConfig</span>, and <span class="code-inline">CompatibilityConfig</span>.</li>
+        <li>CLI overrides runtime values directly for workers in command handlers before run begins.</li>
+        <li><span class="code-inline">runtime.cpu_workers</span> values &lt;= 0 are replaced by auto-selection in executor initialization.</li>
+        <li><span class="code-inline">runtime.stage2_checkpoint_mode</span> defaults to <span class="code-inline">final</span>, which writes <span class="code-inline">pm1.mat</span> once after convergence to reduce stage-2 I/O without changing the final artifact contract.</li>
+        <li>Use <span class="code-inline">periodic</span> with <span class="code-inline">runtime.stage2_checkpoint_interval</span> for restart-friendly snapshots, or <span class="code-inline">always</span> to preserve the older per-iteration checkpoint pattern.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Security considerations</h2>
+      <ul>
+        <li>Config file path passed via CLI is opened directly and parsed as plain YAML/JSON.</li>
+        <li>Invalid paths produce <span class="code-inline">ConfigError</span> and terminate command execution.</li>
+        <li>Reference replay mode in compatibility config can read another dataset root; verify permissions when using untrusted directories.</li>
+      </ul>
+      <p class="callout warning">Strict reference mode copies all merged and patch-stage artifacts from a trusted root. Use only approved locations.</p>
+    </section>
+  </main>
+</div>
+</body>
+</html>
