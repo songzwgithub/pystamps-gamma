@@ -73,12 +73,12 @@ config = GammaStage1Config(
         global_max_candidates=1_000_000,
 
         # 自动patch目标：每patch约2.5万个候选点。
-        target_candidates_per_patch=25_000,
+        target_candidates_per_patch=50_000,
 
         min_range_patches=1,
         min_azimuth_patches=1,
-        max_range_patches=40,
-        max_azimuth_patches=40,
+        max_range_patches=20,
+        max_azimuth_patches=20,
     ),
 
     auto_patch_layout=True,
