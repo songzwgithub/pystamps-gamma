@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quick Start - pySTAMPS Docs</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script defer src="assets/scripts.js"></script>
+</head>
+<body>
+<div class="site">
+  <aside class="sidebar">
+    <div class="logo"><img class="brand-logo" src="assets/pystamps-logo.svg" alt="pySTAMPS logo" /><h1>pySTAMPS Docs</h1></div>
+    <small>Practical command flow for a first run.</small>
+    <nav>
+      <div class="nav-group"><h2>Guide</h2><ul class="nav-list"><li><a href="index.html">Introduction</a></li><li><a href="stages.html">Stages and Code Paths</a></li><li><a href="pipeline-science-guide.html">Pipeline Guide</a></li><li><a href="getting-started.html">Getting Started</a></li><li><a href="installation.html">Installation</a></li><li><a class="active" href="quickstart.html">Quick Start</a></li><li><a href="native-cli.html">Native Rust CLI</a></li><li><a href="architecture.html">Architecture</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="usage.html">Usage</a></li><li><a href="testing.html">Testing</a></li><li><a href="verification.html">Verification</a></li><li><a href="contributing.html">Contributing</a></li><li><a href="faq.html">FAQ</a></li></ul></div>
+      <div class="nav-group"><h2>Reference</h2><ul class="nav-list"><li><a href="function-reference.html">Function Reference</a></li><li><a href="api/pystamps.html">Package API</a></li></ul></div>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home / Quick Start</div>
+
+    <section class="hero">
+      <span class="badge">Run flow</span>
+      <h1>Copy the dataset, inspect it, dry-run, then execute.</h1>
+      <p>This is the shortest practical path through pySTAMPS. Each command is safe to run on a writable dataset copy and can be narrowed to one stage when you are debugging.</p>
+      <div class="hero-actions">
+        <a class="button-link" href="native-cli.html">Native Rust commands</a>
+        <a class="button-link secondary" href="stages.html">Stage details</a>
+        <a class="button-link secondary" href="verification.html">Verify outputs</a>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Step 1: make a run copy</h2>
+      <p>pySTAMPS writes outputs into the dataset tree. Keep the source dataset untouched.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">export SOURCE_DATASET=/path/to/original_dataset
+export RUN_DATASET=/path/to/run_dataset
+
+rm -rf "$RUN_DATASET"
+cp -a "$SOURCE_DATASET" "$RUN_DATASET"</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Step 2: inspect and dry-run</h2>
+      <p>These commands do not write stage outputs. Use them to confirm what pySTAMPS sees and what it plans to execute.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps status --dataset "$RUN_DATASET"</code></pre>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps run --dataset "$RUN_DATASET" --start-step 1 --end-step 8 --dry-run</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Step 3: run the Python CLI</h2>
+      <p>Run the full pipeline or narrow the stage range while debugging.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps run --dataset "$RUN_DATASET" --start-step 1 --end-step 8</code></pre>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps run --dataset "$RUN_DATASET" --start-step 6 --end-step 8</code></pre>
+      <div class="callout tip">For debugging, shorten the range. If the copied dataset already has outputs, completed stages can report <span class="code-inline">skipped_existing</span>.</div>
+    </section>
+
+    <section class="card">
+      <h2>Step 4: run the native Rust CLI</h2>
+      <p>Use this when you want the standalone Rust runner instead of the Python wrapper.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">cargo build --release -p pystamps-core --bin pystamps-native
+
+target/release/pystamps-native run \
+  --native-only \
+  --dataset "$RUN_DATASET" \
+  --start-step 1 \
+  --end-step 8 \
+  --backend native \
+  --stage2-kernel-backend native \
+  --cpu-workers 0 \
+  --stage2-native-threads 0</code></pre>
+      <div class="callout info"><span class="code-inline">0</span> worker values mean auto-use the CPUs visible to the process. Set positive values to cap resources.</div>
+    </section>
+
+    <section class="card">
+      <h2>Step 5: validate and benchmark</h2>
+      <p>Verification compares your run copy to a reference dataset. The native full-chain gate also records JSON reports for coverage, timings, and parity.</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps verify --run /path/to/run_dataset --golden /path/to/reference_dataset
+make native-full-chain-verify</code></pre>
+    </section>
+
+    <section class="panel-grid">
+      <article class="action-card">
+        <h3>Need worker tuning?</h3>
+        <pre><button class="copy-btn">Copy</button><code class="language-bash">uv run pystamps run --dataset DATASET_DIR --start-step 1 --end-step 8 --io-workers 12 --cpu-workers 4</code></pre>
+      </article>
+      <article class="action-card">
+        <h3>Need a config file?</h3>
+        <pre><button class="copy-btn">Copy</button><code class="language-yaml">runtime:
+  backend: auto
+  stage2_kernel_backend: auto
+  stage2_native_threads: 0
+  io_workers: 8
+  cpu_workers: 0
+  stage7_chunk_ps: 100000
+  stage8_chunk_edges: 200000
+  enable_mat_stage_cache: true
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1</code></pre>
+      </article>
+      <article class="action-card">
+        <h3>Need the execution map?</h3>
+        <p>Use the copy-first flow above, then read <a href="stages.html">Stages and Code Paths</a> when you need to understand artifacts or narrow execution to one stage.</p>
+      </article>
+    </section>
+
+    <section class="diagram-card">
+      <h2>Execution Map</h2>
+      <p>Short sequence: copy, <span class="code-inline">status</span>, optional <span class="code-inline">--dry-run</span>, stage execution, <span class="code-inline">verify</span>, and native gate reports when needed.</p>
+      <img class="doc-figure" src="assets/pystamps-workflow.svg" alt="pySTAMPS execution workflow from dataset copy through verification" />
+    </section>
+
+    <section class="card">
+      <h2>CLI flags by command</h2>
+      <ul>
+        <li><span class="code-inline">status</span>: <span class="code-inline">--dataset</span></li>
+        <li><span class="code-inline">run</span>: <span class="code-inline">--dataset</span>, <span class="code-inline">--start-step</span>, <span class="code-inline">--end-step</span>, <span class="code-inline">--dry-run</span>, <span class="code-inline">--io-workers</span>, <span class="code-inline">--cpu-workers</span></li>
+        <li><span class="code-inline">verify</span>: <span class="code-inline">--run</span>, <span class="code-inline">--golden</span></li>
+        <li><span class="code-inline">describe-backends</span>: no flags</li>
+        <li><span class="code-inline">list-legacy</span>: <span class="code-inline">--stamps-root</span> or <span class="code-inline">STAMPS_ROOT</span></li>
+      </ul>
+    </section>
+  </main>
+</div>
+</body>
+</html>

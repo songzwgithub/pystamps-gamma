@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="/usr/bin:$PATH"
+
+export REAL_DATASET="/mnt/vol-gdc28n1r/insar/cangzhou_P69/pystamps_sbas_ps_optimized"
+
+export PYSTAMPS_STAGE6_GRID_RESUME=1
+export PYSTAMPS_STAGE6_GRID_IFG_BATCH=4
+export PYSTAMPS_STAGE6_GRID_WINDOW_BATCH=32
+export PYSTAMPS_STAGE6_GRID_FFT_WORKERS=16
+
+export PYSTAMPS_SBAS_EDGE_CHUNK=8192
+export PYSTAMPS_SBAS_STRICT_ANNEAL=0
+export PYSTAMPS_SBAS_ANNEAL_RUNS=1
+export PYSTAMPS_SBAS_ANNEAL_WORKERS=1
+
+export PYSTAMPS_STAGE6_SNAPHU_WORKERS="${PYSTAMPS_STAGE6_SNAPHU_WORKERS:-8}"
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export BLIS_NUM_THREADS=1
+export MALLOC_ARENA_MAX=2
+export PYTHONUNBUFFERED=1
+
+cd "/home/ubuntu/software/pystamps-main"
+
+exec ./run_stage6_fast.sh

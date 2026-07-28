@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Installation - pySTAMPS Docs</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script defer src="assets/scripts.js"></script>
+</head>
+<body>
+<div class="site">
+  <aside class="sidebar">
+    <div class="logo"><img class="brand-logo" src="assets/pystamps-logo.svg" alt="pySTAMPS logo" /><h1>pySTAMPS Docs</h1></div>
+    <small>Installation Guide</small>
+    <nav>
+      <div class="nav-group"><h2>Guide</h2><ul class="nav-list"><li><a href="index.html">Introduction</a></li><li><a href="stages.html">Stages and Code Paths</a></li><li><a href="pipeline-science-guide.html">Pipeline Guide</a></li><li><a href="getting-started.html">Getting Started</a></li><li><a class="active" href="installation.html">Installation</a></li><li><a href="quickstart.html">Quick Start</a></li><li><a href="native-cli.html">Native Rust CLI</a></li><li><a href="architecture.html">Architecture</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="usage.html">Usage</a></li><li><a href="testing.html">Testing</a></li><li><a href="verification.html">Verification</a></li><li><a href="contributing.html">Contributing</a></li><li><a href="faq.html">FAQ</a></li></ul></div>
+      <div class="nav-group"><h2>API</h2><ul class="nav-list"><li><a href="api/pystamps.html">Package</a></li><li><a href="api/configuration.html">config</a></li><li><a href="api/cli.html">cli</a></li><li><a href="api/status.html">status</a></li><li><a href="api/verify.html">verify</a></li><li><a href="api/parity_contract.html">parity_contract</a></li><li><a href="api/io_dataset.html">io.dataset</a></li><li><a href="api/io_mat.html">io.mat</a></li><li><a href="api/runtime.html">runtime</a></li><li><a href="api/kernels.html">kernels</a></li><li><a href="api/pipeline_types.html">pipeline.types</a></li><li><a href="api/pipeline_stages.html">pipeline.stages</a></li><li><a href="api/pipeline_ported.html">pipeline.ported</a></li><li><a href="api/compat_legacy.html">compat.legacy</a></li></ul></div>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb">Home / Installation</div>
+    <h1>Installation</h1>
+
+    <section class="card">
+      <h2>Prerequisites</h2>
+      <ul>
+        <li>Python 3.12+</li>
+        <li>Rust toolchain required for source and editable installs of the native Rust/CPU extension</li>
+        <li>Recommended local runner: <span class="code-inline">uv</span></li>
+        <li>Optional: <span class="code-inline">triangle</span> binary on PATH (triangulation workflows)</li>
+        <li>Optional: <span class="code-inline">snaphu</span> binary on PATH (legacy unwrap flow)</li>
+      </ul>
+      <div class="callout warning">No Dockerfile is included. For containerized deployments, install package-level requirements and mount datasets as bind mounts.</div>
+    </section>
+
+    <section class="card">
+      <h2>Install from source / local checkout</h2>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">git clone git@github.com:sirbastiano/pystamps.git
+cd pystamps
+uv sync
+uv run pystamps describe-backends</code></pre>
+      <p><span class="code-inline">describe-backends</span> confirms which <span class="code-inline">python</span>, <span class="code-inline">native</span>, and optional <span class="code-inline">cuda</span> kernel providers are available.</p>
+      <p>Developer profile:</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">python -m pip install -e .
+python -m pip install -e ".[dev]"</code></pre>
+      <p>Editable installs compile the Rust-backed native module locally, so <span class="code-inline">cargo --version</span> must work before installation.</p>
+    </section>
+
+    <section class="card">
+      <h2>Install from PyPI</h2>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">python -m pip install pystamps-insar</code></pre>
+      <p>Supported platforms use prebuilt wheels for the Rust extension and bundled <span class="code-inline">pystamps-native</span> executable, so they do not need a local compiler toolchain.</p>
+      <p>Optional GPU backend:</p>
+      <pre><button class="copy-btn">Copy</button><code class="language-bash">python -m pip install "pystamps-insar[gpu]"</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Configuration</h2>
+      <ul>
+        <li>Configuration path is passed via CLI flag <span class="code-inline">--config</span>.</li>
+        <li>Accepted formats: YAML or JSON.</li>
+        <li>When omitted, defaults from <span class="code-inline">pystamps.config.RunConfig()</span> are used.</li>
+      </ul>
+      <pre><button class="copy-btn">Copy</button><code class="language-yaml">runtime:
+  backend: auto
+  stage2_kernel_backend: native
+  stage2_native_threads: 0
+  kernel_backend_overrides:
+    stage2_grid_accumulate: native
+    stage2_histogram: native
+    stage2_topofit: native
+    stage2_topofit_row_invariant: native
+    stage2_topofit_coh_row_invariant: native
+    stage4_edge_stats: native
+    stage7_scla: native
+    stage8_edge_noise: native
+  io_workers: 8
+  cpu_workers: 0
+  enable_mat_stage_cache: true
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1
+  stage7_chunk_ps: 100000
+  stage8_chunk_edges: 200000
+compat:
+  strict_reference: false
+  reference_root: null
+tolerance:
+  rtol: 1e-5
+  atol: 1e-7
+  wrap_equivalence: true
+  wrap_period: 6.283185307179586</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Environment and directories</h2>
+      <ul>
+        <li>Repository has source assets under <span class="code-inline">/tmp</span>, <span class="code-inline">inputs_and_outputs</span>, and <span class="code-inline">StaMPS</span>.</li>
+        <li>Large validation artifacts are repository-local and not required for runtime package installation.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Troubleshooting</h2>
+      <details class="api-section" open>
+        <summary>ImportError: No module named ...</summary>
+        <div class="api-body"><p>Install editable mode from repo root and ensure terminal uses the same interpreter as current shell.</p></div>
+      </details>
+      <details class="api-section">
+        <summary>ConfigError: Config must be YAML or JSON</summary>
+        <div class="api-body"><p>Provide <span class="code-inline">.yml</span>, <span class="code-inline">.yaml</span>, or <span class="code-inline">.json</span> file path.</p></div>
+      </details>
+      <details class="api-section">
+        <summary>No reference to triangle/snaphu</summary>
+        <div class="api-body"><p>Binary lookups are environment-driven outside package import path; install and export PATH only when running legacy-dependent workflows.</p></div>
+      </details>
+    </section>
+  </main>
+</div>
+</body>
+</html>
