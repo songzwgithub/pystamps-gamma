@@ -1,0 +1,1505 @@
+
+
+# ===== Stage6 performance tuning =====
+import os
+
+os.environ.setdefault(
+    "OMP_NUM_THREADS",
+    "24"
+)
+
+os.environ.setdefault(
+    "OPENBLAS_NUM_THREADS",
+    "24"
+)
+
+os.environ.setdefault(
+    "MKL_NUM_THREADS",
+    "24"
+)
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import math
+import os
+from pathlib import Path
+import shutil
+import time
+from typing import Any
+
+
+import numpy as np
+
+try:
+    from threadpoolctl import threadpool_limits
+except:
+    threadpool_limits=None
+
+
+from pystamps.io.mat import read_mat, read_mat_variables, write_mat
+
+
+TWO_PI = 2.0 * math.pi
+
+
+class Stage6SbasError(RuntimeError):
+    """Raised when the StaMPS-compatible SBAS Stage 6 cannot continue."""
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return max(minimum, int(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise Stage6SbasError(f"{name} must be an integer") from exc
+    if value < minimum:
+        raise Stage6SbasError(f"{name} must be >= {minimum}")
+    return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise Stage6SbasError(f"{name} must be true/false or 1/0")
+
+
+def _mat_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    arr = np.asarray(value)
+    if arr.size == 0:
+        return default
+    if arr.dtype.kind in {"U", "S"}:
+        return "".join(str(v) for v in arr.reshape(-1)).strip()
+    if arr.dtype == object:
+        return str(arr.reshape(-1)[0]).strip()
+    return str(arr.reshape(-1)[0]).strip()
+
+
+def _scalar(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return float(default)
+    arr = np.asarray(value)
+    if arr.size == 0:
+        return float(default)
+    return float(arr.reshape(-1)[0])
+
+
+def _as_rows(value: Any, rows: int, name: str, dtype: np.dtype[Any]) -> np.ndarray:
+    arr = np.asarray(value)
+    if arr.size == 0:
+        raise Stage6SbasError(f"{name} is empty")
+    arr = np.squeeze(arr)
+    if arr.ndim == 1:
+        if rows == 1:
+            arr = arr.reshape(1, -1)
+        elif arr.size % rows == 0:
+            arr = arr.reshape(rows, -1)
+        else:
+            raise Stage6SbasError(f"{name} cannot be reshaped to {rows} rows")
+    if arr.ndim != 2:
+        raise Stage6SbasError(f"{name} must be a 2-D matrix")
+    if arr.shape[0] != rows and arr.shape[1] == rows:
+        arr = arr.T
+    if arr.shape[0] != rows:
+        raise Stage6SbasError(
+            f"{name} has shape {arr.shape}; expected first dimension {rows}"
+        )
+    return np.asarray(arr, dtype=dtype)
+
+
+def _as_vector(value: Any, length: int, name: str, dtype: np.dtype[Any]) -> np.ndarray:
+    arr = np.asarray(value).reshape(-1)
+    if arr.size != length:
+        raise Stage6SbasError(f"{name} has {arr.size} values; expected {length}")
+    return np.asarray(arr, dtype=dtype)
+
+
+def _normalize_complex(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.complex64).copy()
+    magnitude = np.abs(arr)
+    np.divide(arr, magnitude, out=arr, where=magnitude != 0)
+    return arr
+
+
+def _drop_indices(value: Any, n_ifg: int) -> np.ndarray:
+    if value is None:
+        return np.empty(0, dtype=np.int64)
+    arr = np.asarray(value).reshape(-1)
+    if arr.size == 0:
+        return np.empty(0, dtype=np.int64)
+    arr = np.rint(arr).astype(np.int64)
+    return np.unique(arr[(arr >= 1) & (arr <= n_ifg)])
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def _find_network_source(dataset_root: Path) -> Path:
+    candidates = [dataset_root / "ps2.mat"]
+    candidates.extend(sorted(dataset_root.glob("PATCH_*/ps1.mat")))
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = read_mat_variables(path, ("ifgday_ix",))
+        except Exception:
+            continue
+        if "ifgday_ix" in payload and np.asarray(payload["ifgday_ix"]).size:
+            return path
+    raise Stage6SbasError(
+        "SBAS network geometry ifgday_ix is missing. "
+        "Expected it in ps2.mat or PATCH_*/ps1.mat."
+    )
+
+
+def load_sbas_network(
+    dataset_root: Path,
+    n_ifg: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, Path]:
+    """Load StaMPS SBAS acquisition dates, IFG endpoint indices and baselines."""
+
+    source = _find_network_source(dataset_root)
+    network = read_mat_variables(
+        source,
+        ("ifgday_ix", "day", "n_image", "n_ifg", "bperp", "master_day"),
+    )
+
+    ifgday_ix = np.asarray(network.get("ifgday_ix"), dtype=np.float64)
+    ifgday_ix = np.squeeze(ifgday_ix)
+    if ifgday_ix.ndim != 2:
+        raise Stage6SbasError(f"{source}: ifgday_ix must be 2-D")
+    if ifgday_ix.shape[1] != 2 and ifgday_ix.shape[0] == 2:
+        ifgday_ix = ifgday_ix.T
+    if ifgday_ix.shape != (n_ifg, 2):
+        raise Stage6SbasError(
+            f"{source}: ifgday_ix shape is {ifgday_ix.shape}; expected ({n_ifg}, 2)"
+        )
+    ifgday_ix = np.rint(ifgday_ix).astype(np.int64)
+
+    day_raw = network.get("day")
+    if day_raw is None or np.asarray(day_raw).size == 0:
+        root_ps = read_mat_variables(dataset_root / "ps2.mat", ("day",))
+        day_raw = root_ps.get("day")
+    day = np.asarray(day_raw, dtype=np.float64).reshape(-1)
+    if day.size < 2:
+        raise Stage6SbasError(f"{source}: day must contain acquisition dates")
+
+    if np.any(ifgday_ix < 1) or np.any(ifgday_ix > day.size):
+        raise Stage6SbasError(
+            f"{source}: ifgday_ix contains indices outside 1..{day.size}"
+        )
+
+    root_ps = read_mat_variables(dataset_root / "ps2.mat", ("bperp",))
+    bperp_raw = root_ps.get("bperp")
+    if bperp_raw is None or np.asarray(bperp_raw).size != n_ifg:
+        bperp_raw = network.get("bperp")
+    bperp = _as_vector(bperp_raw, n_ifg, "SBAS bperp", np.float64)
+
+    return day, ifgday_ix, bperp, source
+
+
+def _active_network(
+    day: np.ndarray,
+    ifgday_ix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n_ifg = ifgday_ix.shape[0]
+    n_image = day.size
+    G_full = np.zeros((n_ifg, n_image), dtype=np.float64)
+    rows = np.arange(n_ifg, dtype=np.int64)
+    G_full[rows, ifgday_ix[:, 0] - 1] = -1.0
+    G_full[rows, ifgday_ix[:, 1] - 1] = 1.0
+
+    used = np.any(G_full != 0, axis=0)
+    if np.count_nonzero(used) < 2:
+        raise Stage6SbasError("SBAS network contains fewer than two active acquisitions")
+
+    old_to_new = np.zeros(n_image + 1, dtype=np.int64)
+    old_to_new[np.flatnonzero(used) + 1] = np.arange(1, np.count_nonzero(used) + 1)
+    ifg_active = old_to_new[ifgday_ix]
+    day_active = day[used]
+    G = G_full[:, used]
+
+    rank = int(np.linalg.matrix_rank(G))
+    expected_rank = G.shape[1] - 1
+    if rank != expected_rank:
+        raise Stage6SbasError(
+            "SBAS acquisition graph is disconnected or rank deficient: "
+            f"rank(G)={rank}, expected={expected_rank}, active_images={G.shape[1]}"
+        )
+    return G, day_active, ifg_active
+
+
+def _edge_nodes(edgs: Any, n_node: int) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(edgs, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        raise Stage6SbasError("uw_interp.edgs must be a 2-D matrix")
+    node_a = np.rint(arr[:, -2]).astype(np.int64) - 1
+    node_b = np.rint(arr[:, -1]).astype(np.int64) - 1
+    if (
+        np.any(node_a < 0)
+        or np.any(node_b < 0)
+        or np.any(node_a >= n_node)
+        or np.any(node_b >= n_node)
+    ):
+        raise Stage6SbasError("uw_interp.edgs contains out-of-range node indices")
+    return node_a, node_b
+
+
+def _arc_phasors(
+    uw_ph: np.ndarray,
+    node_a: np.ndarray,
+    node_b: np.ndarray,
+    start: int,
+    stop: int,
+) -> np.ndarray:
+    values = (
+        uw_ph[node_b[start:stop], :]
+        * np.conj(uw_ph[node_a[start:stop], :])
+    ).astype(np.complex64)
+    return _normalize_complex(values)
+
+
+def _prepare_la_subset(
+    dph_space: np.ndarray,
+    *,
+    G: np.ndarray,
+    ifgday_ix: np.ndarray,
+    day: np.ndarray,
+    bperp: np.ndarray,
+    n_trial_wraps: float,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    full_range = float(np.ptp(bperp))
+    if full_range <= np.finfo(np.float64).eps:
+        return dph_space[:, :1], np.zeros(1, dtype=np.float64), 0.0
+
+    adjacent = np.flatnonzero(np.abs(np.diff(ifgday_ix, axis=1).reshape(-1)) == 1)
+    if adjacent.size >= day.size - 1:
+        dph_sub = dph_space[:, adjacent]
+        bperp_sub = bperp[adjacent].astype(np.float64)
+    else:
+        per_image = np.sum(np.abs(G), axis=0)
+        max_ix = int(np.argmax(per_image))
+        if int(per_image[max_ix]) >= day.size - 2:
+            cols = np.flatnonzero(G[:, max_ix] != 0)
+            gsub = G[cols, max_ix]
+            orient = -np.sign(gsub).astype(np.int64)
+
+            dph_oriented = dph_space[:, cols].copy()
+            flip = orient == -1
+            if np.any(flip):
+                dph_oriented[:, flip] = np.conj(dph_oriented[:, flip])
+
+            b_oriented = bperp[cols].astype(np.float64) * orient.astype(np.float64)
+            slave_ix = np.sum(ifgday_ix[cols, :], axis=1) - (max_ix + 1)
+            image_ix = np.concatenate((slave_ix, np.asarray([max_ix + 1], dtype=np.int64)))
+            order = np.argsort(day[image_ix - 1], kind="stable")
+
+            dph_with_master = np.concatenate(
+                (
+                    dph_oriented,
+                    np.ones((dph_oriented.shape[0], 1), dtype=np.complex64),
+                ),
+                axis=1,
+            )[:, order]
+            b_with_master = np.concatenate((b_oriented, np.asarray([0.0])))[order]
+            dph_sub = (
+                dph_with_master[:, 1:]
+                * np.conj(dph_with_master[:, :-1])
+            )
+            dph_sub = _normalize_complex(dph_sub)
+            bperp_sub = np.diff(b_with_master)
+        else:
+            dph_sub = dph_space
+            bperp_sub = bperp.astype(np.float64)
+
+    sub_range = float(np.ptp(bperp_sub))
+    if sub_range <= np.finfo(np.float64).eps:
+        return dph_sub, bperp_sub, 0.0
+    scaled_trials = float(n_trial_wraps) * sub_range / full_range
+    return dph_sub, bperp_sub, scaled_trials
+
+
+def _fit_la_error_chunk(
+    dph_space: np.ndarray,
+    *,
+    G: np.ndarray,
+    ifgday_ix: np.ndarray,
+    day: np.ndarray,
+    bperp: np.ndarray,
+    n_trial_wraps: float,
+) -> np.ndarray:
+    dph_sub, b_sub, scaled_trials = _prepare_la_subset(
+        dph_space,
+        G=G,
+        ifgday_ix=ifgday_ix,
+        day=day,
+        bperp=bperp,
+        n_trial_wraps=n_trial_wraps,
+    )
+    edge_count = dph_space.shape[0]
+    if scaled_trials <= 0 or b_sub.size == 0:
+        return np.zeros(edge_count, dtype=np.float32)
+
+    b_range = float(np.ptp(b_sub))
+    if b_range <= np.finfo(np.float64).eps:
+        return np.zeros(edge_count, dtype=np.float32)
+
+    trial_limit = max(1, int(math.ceil(8.0 * scaled_trials)))
+    trial_mult = np.arange(-trial_limit, trial_limit + 1, dtype=np.float64)
+    trial_phase = b_sub / b_range * (math.pi / 4.0)
+    trial_matrix = np.exp(-1j * np.outer(trial_phase, trial_mult))
+    coherence = np.abs(dph_sub @ trial_matrix)
+    denominator = np.sum(np.abs(dph_sub), axis=1, keepdims=True)
+    coherence = np.divide(
+        coherence,
+        denominator,
+        out=np.zeros_like(coherence, dtype=np.float64),
+        where=denominator != 0,
+    )
+
+    K = np.zeros(edge_count, dtype=np.float64)
+    final_coh = np.zeros(edge_count, dtype=np.float64)
+
+    for edge in range(edge_count):
+        row = coherence[edge]
+        peak = int(np.argmax(row))
+        peak_value = float(row[peak])
+
+        falling = np.flatnonzero(np.diff(row[: peak + 1]) < 0)
+        peak_start = int(falling[-1] + 1) if falling.size else 0
+
+        rising = np.flatnonzero(np.diff(row[peak:]) > 0)
+        peak_end = int(rising[0] + peak) if rising.size else row.size - 1
+
+        second = row.copy()
+        second[peak_start : peak_end + 1] = 0.0
+        if peak_value - float(np.max(second)) <= 0.1:
+            continue
+
+        K0 = math.pi / 4.0 / b_range * trial_mult[peak]
+        cpx = dph_sub[edge]
+        residual = cpx * np.exp(-1j * K0 * b_sub)
+        offset = np.sum(residual)
+        residual_angle = np.angle(residual * np.conj(offset))
+        weights = np.abs(cpx)
+        denom = float(np.sum(weights * b_sub * b_sub))
+        correction = (
+            float(np.sum(weights * b_sub * residual_angle)) / denom
+            if denom > 0
+            else 0.0
+        )
+        k_value = K0 + correction
+        fitted = cpx * np.exp(-1j * k_value * b_sub)
+        coh_value = float(np.abs(np.sum(fitted)) / max(np.sum(np.abs(fitted)), 1e-12))
+        if coh_value >= 0.31:
+            K[edge] = k_value
+            final_coh[edge] = coh_value
+
+    return K.astype(np.float32)
+
+
+def _covariance_whitener(
+    uw_ph: np.ndarray,
+    ph_lowpass: np.ndarray | None,
+    node_a: np.ndarray,
+    node_b: np.ndarray,
+    edge_chunk: int,
+) -> np.ndarray:
+    n_ifg = uw_ph.shape[1]
+    if ph_lowpass is None or ph_lowpass.shape != uw_ph.shape:
+        return np.eye(n_ifg, dtype=np.float64)
+
+    count = 0
+    total = np.zeros(n_ifg, dtype=np.float64)
+    outer = np.zeros((n_ifg, n_ifg), dtype=np.float64)
+
+    ph_noise = np.angle(
+        uw_ph.astype(np.complex128)
+        * np.conj(ph_lowpass.astype(np.complex128))
+    )
+
+    for start in range(0, node_a.size, edge_chunk):
+        stop = min(start + edge_chunk, node_a.size)
+        diff = (
+            ph_noise[node_b[start:stop], :]
+            - ph_noise[node_a[start:stop], :]
+        ).astype(np.float64)
+        total += np.sum(diff, axis=0)
+        outer += diff.T @ diff
+        count += diff.shape[0]
+
+    if count <= 1:
+        return np.eye(n_ifg, dtype=np.float64)
+
+    covariance = (
+        outer - np.outer(total, total) / float(count)
+    ) / float(count - 1)
+    covariance = 0.5 * (covariance + covariance.T)
+
+    try:
+        inverse = np.linalg.pinv(covariance, hermitian=True)
+        chol = np.linalg.cholesky(inverse)
+        return chol.T
+    except np.linalg.LinAlgError:
+        diagonal = np.diag(covariance)
+        scale = np.divide(
+            1.0,
+            np.sqrt(diagonal),
+            out=np.ones_like(diagonal),
+            where=diagonal > 0,
+        )
+        return np.diag(scale)
+
+
+def _anneal_cost(
+    model: np.ndarray,
+    *,
+    G: np.ndarray,
+    W: np.ndarray,
+    dph: np.ndarray,
+    x: np.ndarray,
+) -> float:
+    n = G.shape[1]
+    series = (
+        model[0] * x
+        + model[1] * n / 2.0 * np.sin(2.0 * math.pi / n * x - model[2])
+        + model[3] * n / 2.0 * np.sin(4.0 * math.pi / n * x - model[4])
+    )
+    predicted = G @ series
+    residual_cycles = (dph - predicted) / TWO_PI
+    wrapped_cycles = residual_cycles - np.rint(residual_cycles)
+    weighted = np.abs(W @ wrapped_cycles) * TWO_PI
+    return float(np.sum(weighted) + np.sum(np.abs(np.diff(series))) / 5.0)
+
+
+def _boltzmann_probabilities(temperature: float, values: np.ndarray) -> np.ndarray:
+    scaled = np.asarray(values, dtype=np.float64) / max(float(temperature), 1e-12)
+    maximum = float(np.nanmax(scaled))
+    if maximum > 708.3964185322641:
+        factor = maximum / 708.3964185322641
+        probability = np.exp(-scaled / factor)
+        probability /= max(float(np.nanmax(probability)), 1e-300)
+        probability = probability**factor
+    else:
+        probability = np.exp(-scaled)
+        probability /= max(float(np.nanmax(probability)), 1e-300)
+    probability[~np.isfinite(probability)] = 0.0
+    total = float(np.sum(probability))
+    if total <= 0:
+        return np.full(probability.shape, 1.0 / probability.size)
+    return probability / total
+
+
+def _anneal_smooth_unwrap(
+    *,
+    G: np.ndarray,
+    W: np.ndarray,
+    dph: np.ndarray,
+    x: np.ndarray,
+    seed: int,
+    runs: int,
+) -> np.ndarray:
+    """Port of StaMPS uw_sb_smooth_unwrap for one high-noise arc."""
+
+    bounds = np.asarray(
+        [
+            [-0.5 * math.pi, 0.5 * math.pi],
+            [-0.25 * math.pi, 0.25 * math.pi],
+            [-math.pi, math.pi],
+            [-0.25 * math.pi, 0.25 * math.pi],
+            [-math.pi, math.pi],
+        ],
+        dtype=np.float64,
+    )
+    grid = 4
+    values = np.concatenate(
+        (
+            2.0 ** (-np.arange(1, grid + 1, dtype=np.float64)),
+            np.asarray([0.0]),
+            -(2.0 ** (-np.arange(1, grid + 1, dtype=np.float64))),
+        )
+    )
+    delta = 0.5 * np.abs(bounds[:, 0] - bounds[:, 1])
+    rng = np.random.default_rng(seed)
+    best_cost = math.inf
+    best_model = np.zeros(5, dtype=np.float64)
+    ts = np.linspace(2.0, 3.0, max(1, runs))
+
+    schedule_repeats = np.asarray([1, 2, 4, 6, 10, 6, 4, 2, 1], dtype=np.int64)
+    for run in range(max(1, runs)):
+        candidates = (
+            rng.random((100, 5))
+            * (bounds[:, 1] - bounds[:, 0])[None, :]
+            + bounds[:, 0][None, :]
+        )
+        initial_costs = np.asarray(
+            [
+                _anneal_cost(model, G=G, W=W, dph=dph, x=x)
+                for model in candidates
+            ],
+            dtype=np.float64,
+        )
+        current = candidates[int(np.argmin(initial_costs))].copy()
+        critical_log10 = math.log10(max(float(np.mean(initial_costs)), 1e-12)) - float(ts[run])
+        temperatures = np.repeat(
+            np.logspace(critical_log10 + 1.0, critical_log10 - 1.0, 9),
+            schedule_repeats,
+        )
+
+        current_best_cost = float(np.min(initial_costs))
+        current_best_model = current.copy()
+
+        for temperature in temperatures:
+            for parameter in range(5):
+                if delta[parameter] == 0:
+                    continue
+                candidate_values = current[parameter] + values * delta[parameter]
+                candidate_values = candidate_values[
+                    (candidate_values >= bounds[parameter, 0])
+                    & (candidate_values <= bounds[parameter, 1])
+                ]
+                models = np.repeat(current[None, :], candidate_values.size, axis=0)
+                models[:, parameter] = candidate_values
+                costs = np.asarray(
+                    [
+                        _anneal_cost(model, G=G, W=W, dph=dph, x=x)
+                        for model in models
+                    ],
+                    dtype=np.float64,
+                )
+                probabilities = _boltzmann_probabilities(float(temperature), costs)
+                selected = int(rng.choice(np.arange(costs.size), p=probabilities))
+                current = models[selected].copy()
+                if float(costs[selected]) < current_best_cost:
+                    current_best_cost = float(costs[selected])
+                    current_best_model = current.copy()
+
+        if current_best_cost < best_cost:
+            best_cost = current_best_cost
+            best_model = current_best_model
+
+    n = G.shape[1]
+    return (
+        best_model[0] * x
+        + best_model[1] * n / 2.0 * np.sin(2.0 * math.pi / n * x - best_model[2])
+        + best_model[3] * n / 2.0 * np.sin(4.0 * math.pi / n * x - best_model[4])
+    ).astype(np.float64)
+
+
+def compute_sbas_space_time(
+    *,
+    uw_ph: np.ndarray,
+    ph_lowpass: np.ndarray | None,
+    edgs: Any,
+    day: np.ndarray,
+    ifgday_ix: np.ndarray,
+    bperp: np.ndarray,
+    time_win: float,
+    n_trial_wraps: float,
+    unwrap_method: str,
+    la_flag: bool,
+    edge_chunk: int,
+    anneal_workers: int,
+    anneal_runs: int,
+    strict_anneal: bool,
+    progress: bool,
+    work_dir: Path,
+) -> tuple[np.ndarray, np.memmap, np.memmap, dict[str, Any]]:
+    """StaMPS multiple-master time-space smoothing for SBAS interferograms."""
+
+    n_node, n_ifg = uw_ph.shape
+    if ifgday_ix.shape != (n_ifg, 2):
+        raise Stage6SbasError(
+            f"Selected ifgday_ix shape {ifgday_ix.shape} does not match uw_ph {uw_ph.shape}"
+        )
+    G, day_active, ifg_active = _active_network(day, ifgday_ix)
+    node_a, node_b = _edge_nodes(edgs, n_node)
+    n_edge = node_a.size
+
+    method = unwrap_method.strip().upper()
+    supported = {"3D", "3D_NEW", "3D_SMALL_DEF", "3D_QUICK", "3D_NO_DEF", "2D"}
+    if method not in supported:
+        raise Stage6SbasError(
+            f"SBAS Stage 6 supports {sorted(supported)}; got unwrap_method={unwrap_method!r}"
+        )
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    noise_path = work_dir / "dph_noise.f32"
+    unwrapped_path = work_dir / "dph_space_uw.f32"
+    dph_noise_out = np.memmap(
+        noise_path,
+        mode="w+",
+        dtype=np.float32,
+        shape=(n_edge, n_ifg),
+    )
+    dph_uw_out = np.memmap(
+        unwrapped_path,
+        mode="w+",
+        dtype=np.float32,
+        shape=(n_edge, n_ifg),
+    )
+
+    K_all = np.zeros(n_edge, dtype=np.float32)
+    if la_flag:
+        started = time.perf_counter()
+        for start in range(0, n_edge, edge_chunk):
+            stop = min(start + edge_chunk, n_edge)
+            dph_chunk = _arc_phasors(uw_ph, node_a, node_b, start, stop)
+            K_all[start:stop] = _fit_la_error_chunk(
+                dph_chunk,
+                G=G,
+                ifgday_ix=ifg_active,
+                day=day_active,
+                bperp=bperp,
+                n_trial_wraps=n_trial_wraps,
+            )
+            if progress:
+                print(
+                    "[STAGE6_SBAS][LA] "
+                    f"{stop}/{n_edge} ({100.0 * stop / max(1, n_edge):.1f}%) "
+                    f"elapsed={time.perf_counter() - started:.1f}s",
+                    flush=True,
+                )
+
+    G_reduced = G[:, 1:]
+    G_pinv = np.linalg.pinv(G_reduced)
+    time_diff = day_active[:, None] - day_active[None, :]
+    time_weights = np.exp(
+        -(time_diff * time_diff) / (2.0 * max(float(time_win), 1e-6) ** 2)
+    )
+    time_weights /= np.sum(time_weights, axis=1, keepdims=True)
+
+    if day_active[-1] == day_active[0]:
+        x = np.arange(day_active.size, dtype=np.float64)
+    else:
+        x = (
+            (day_active - day_active[0])
+            * (day_active.size - 1)
+            / (day_active[-1] - day_active[0])
+        )
+
+    whitener = (
+        _covariance_whitener(
+            uw_ph,
+            ph_lowpass,
+            node_a,
+            node_b,
+            edge_chunk,
+        )
+        if method in {"3D", "3D_NEW"} and strict_anneal
+        else np.eye(n_ifg, dtype=np.float64)
+    )
+
+    high_noise_total = 0
+    started = time.perf_counter()
+
+    for start in range(0, n_edge, edge_chunk):
+        stop = min(start + edge_chunk, n_edge)
+        dph = _arc_phasors(uw_ph, node_a, node_b, start, stop)
+        if la_flag:
+            dph *= np.exp(-1j * K_all[start:stop, None] * bperp[None, :])
+
+        if method == "2D":
+            smooth = np.zeros((stop - start, n_ifg), dtype=np.float64)
+            noise = np.angle(dph).astype(np.float64)
+        elif method == "3D_NO_DEF":
+            smooth = np.zeros((stop - start, n_ifg), dtype=np.float64)
+            noise = np.angle(dph).astype(np.float64)
+        else:
+            phase = np.angle(dph).astype(np.float64)
+            series = np.zeros((day_active.size, stop - start), dtype=np.float64)
+            series[1:, :] = G_pinv @ phase.T
+            smooth_series = time_weights @ series
+            smooth = (G @ smooth_series).T
+            noise = np.angle(dph * np.exp(-1j * smooth)).astype(np.float64)
+
+            if method in {"3D_SMALL_DEF", "3D_QUICK"}:
+                invalid = np.std(noise, axis=1) > 1.3
+                noise[invalid, :] = np.nan
+                smooth[invalid, :] = np.nan
+            elif method in {"3D", "3D_NEW"} and strict_anneal:
+                high_local = np.flatnonzero(np.std(noise, axis=1) > 1.0)
+                high_noise_total += int(high_local.size)
+                if high_local.size:
+                    def _run_one(local_index: int) -> tuple[int, np.ndarray]:
+                        global_index = start + int(local_index)
+                        refined = _anneal_smooth_unwrap(
+                            G=G,
+                            W=whitener,
+                            dph=phase[int(local_index), :],
+                            x=x,
+                            seed=104729 + global_index,
+                            runs=anneal_runs,
+                        )
+                        return int(local_index), refined
+
+                    with ThreadPoolExecutor(max_workers=max(1, anneal_workers)) as pool:
+                        futures = [pool.submit(_run_one, int(ix)) for ix in high_local]
+                        for future in as_completed(futures):
+                            local_index, refined_series = future.result()
+                            smooth[local_index, :] = G @ refined_series
+
+                    noise = np.angle(dph * np.exp(-1j * smooth)).astype(np.float64)
+
+        dph_uw = smooth + noise
+        if la_flag:
+            dph_uw += K_all[start:stop, None] * bperp[None, :]
+
+        dph_noise_out[start:stop, :] = noise.astype(np.float32)
+        dph_uw_out[start:stop, :] = dph_uw.astype(np.float32)
+
+        if progress:
+            print(
+                "[STAGE6_SBAS][TIME] "
+                f"{stop}/{n_edge} ({100.0 * stop / max(1, n_edge):.1f}%) "
+                f"elapsed={time.perf_counter() - started:.1f}s "
+                f"high_noise={high_noise_total}",
+                flush=True,
+            )
+
+    dph_noise_out.flush()
+    dph_uw_out.flush()
+    metadata = {
+        "n_edge": int(n_edge),
+        "n_ifg": int(n_ifg),
+        "n_image_active": int(day_active.size),
+        "rank_G": int(np.linalg.matrix_rank(G)),
+        "la_nonzero_edges": int(np.count_nonzero(K_all)),
+        "annealed_edges": int(high_noise_total),
+        "unwrap_method": method,
+    }
+    return G, dph_noise_out, dph_uw_out, metadata
+
+
+def _backup_partial_outputs(dataset_root: Path) -> Path | None:
+    names = (
+        "uw_grid.mat",
+        "uw_interp.mat",
+        "uw_phaseuw.mat",
+        "phuw2.mat",
+        "uw_space_time.mat",
+        "snaphu.conf",
+        "snaphu.in",
+        "snaphu.out",
+        "snaphu.costinfile",
+        "snaphu.log",
+    )
+    existing = [dataset_root / name for name in names if (dataset_root / name).exists()]
+    if not existing:
+        return None
+    backup = (
+        dataset_root
+        / "_stage6_sbas_backup"
+        / time.strftime("%Y%m%d_%H%M%S")
+    )
+    backup.mkdir(parents=True, exist_ok=True)
+    for source in existing:
+        shutil.move(str(source), str(backup / source.name))
+    return backup
+
+
+def _run_snaphu_column(
+    *,
+    index: int,
+    work_root: Path,
+    snaphu_exe: str,
+    ncol: int,
+    uw_ph: np.ndarray,
+    Z: np.ndarray,
+    nzix: np.ndarray,
+    rowix: np.ndarray,
+    colix: np.ndarray,
+    nzrowix: np.ndarray,
+    nzcolix: np.ndarray,
+    rowcost_base: np.ndarray,
+    colcost_base: np.ndarray,
+    dph_noise: np.ndarray,
+    dph_space_uw: np.ndarray,
+    nshortcycle: float,
+    ported: Any,
+) -> tuple[int, np.ndarray, float]:
+    ifg_dir = work_root / f"ifg_{index + 1:04d}"
+    ifg_dir.mkdir(parents=True, exist_ok=True)
+
+    conf = ifg_dir / "snaphu.conf"
+    conf.write_text(
+        "\n".join(
+            (
+                "INFILE  snaphu.in",
+                "OUTFILE snaphu.out",
+                "COSTINFILE snaphu.costinfile",
+                "STATCOSTMODE  DEFO",
+                "INFILEFORMAT  COMPLEX_DATA",
+                "OUTFILEFORMAT FLOAT_DATA",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    rowcost = rowcost_base.copy()
+    colcost = colcost_base.copy()
+    smooth = (
+        np.asarray(dph_space_uw[:, index], dtype=np.float64)
+        - np.asarray(dph_noise[:, index], dtype=np.float64)
+    )
+    wrapped = np.angle(
+        np.exp(1j * np.asarray(dph_space_uw[:, index], dtype=np.float64))
+    )
+    offset_cycle = (wrapped - smooth) / TWO_PI
+
+    offgrid = np.zeros(rowix.shape, dtype=np.int16)
+    edge_index = np.abs(rowix[nzrowix]).astype(np.int64) - 1
+    offgrid[nzrowix] = np.rint(
+        offset_cycle[edge_index]
+        * np.sign(rowix[nzrowix])
+        * nshortcycle
+    ).astype(np.int16)
+    rowcost[:, 0::4] = -offgrid
+
+    offgrid = np.zeros(colix.shape, dtype=np.int16)
+    edge_index = np.abs(colix[nzcolix]).astype(np.int64) - 1
+    offgrid[nzcolix] = np.rint(
+        offset_cycle[edge_index]
+        * np.sign(colix[nzcolix])
+        * nshortcycle
+    ).astype(np.int16)
+    colcost[:, 0::4] = offgrid
+
+    cost_path = ifg_dir / "snaphu.costinfile"
+    ported._write_binary_matrix(cost_path, rowcost)
+    with cost_path.open("ab") as handle:
+        ported._write_binary_matrix(handle, colcost)
+
+    ifgw = np.asarray(uw_ph[Z - 1, index], dtype=np.complex64)
+    ported._write_complex_raster(ifg_dir / "snaphu.in", ifgw)
+    ported._run_external_command(
+        [snaphu_exe, "-d", "-f", "snaphu.conf", str(ncol)],
+        cwd=ifg_dir,
+        log_path=ifg_dir / "snaphu.log",
+    )
+    ifguw = ported._load_float_grid(ifg_dir / "snaphu.out", ncol)
+
+    diff1 = (ifguw[:-1, :] - ifguw[1:, :]).reshape(-1)
+    diff1 = diff1[diff1 != 0]
+    diff2 = (ifguw[:, :-1] - ifguw[:, 1:]).reshape(-1)
+    diff2 = diff2[diff2 != 0]
+    denominator = diff1.size + diff2.size
+    msd = (
+        float(
+            np.sum(diff1.astype(np.float64) ** 2)
+            + np.sum(diff2.astype(np.float64) ** 2)
+        )
+        / float(denominator)
+        if denominator > 0
+        else 0.0
+    )
+    values = ported._extract_grid_values_for_ps(ifguw, nzix).astype(np.float32)
+    return index, values, msd
+
+
+def stage6_sbas_unwrap(
+    dataset_root: Path,
+    backend: str = "auto",
+    io_workers: int = 0,
+    enable_mat_cache: bool = True,
+    mat_cache: dict[Path, dict[str, Any]] | None = None,
+    triangle_path: str | None = None,
+    snaphu_path: str | None = None,
+) -> str:
+    """Run the StaMPS multiple-master SBAS Stage 6 path."""
+
+    import pystamps.pipeline.ported as ported
+
+    root = Path(dataset_root).expanduser().resolve()
+    started = time.perf_counter()
+    progress = _env_bool("PYSTAMPS_SBAS_PROGRESS", True)
+    edge_chunk = _env_int("PYSTAMPS_SBAS_EDGE_CHUNK", 512)
+    snaphu_workers = _env_int("PYSTAMPS_STAGE6_SNAPHU_WORKERS", max(1, min(4, os.cpu_count() or 1)))
+    anneal_workers = _env_int("PYSTAMPS_SBAS_ANNEAL_WORKERS", max(1, min(8, os.cpu_count() or 1)))
+    anneal_runs = _env_int("PYSTAMPS_SBAS_ANNEAL_RUNS", 15)
+    strict_anneal = _env_bool("PYSTAMPS_SBAS_STRICT_ANNEAL", True)
+    keep_work = _env_bool("PYSTAMPS_SBAS_KEEP_WORK", False)
+
+    debug_path = root / "stage6_sbas_debug.json"
+    work_dir = root / "_stage6_sbas_work"
+    snaphu_root = work_dir / "snaphu"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+
+    backup = _backup_partial_outputs(root)
+
+    try:
+        ps2 = read_mat(root / "ps2.mat")
+        n_ps = int(round(_scalar(ps2.get("n_ps"), 0)))
+        if n_ps <= 0:
+            raise Stage6SbasError("ps2.mat missing valid n_ps")
+
+        ph2 = _as_rows(
+            read_mat_variables(root / "ph2.mat", ("ph",)).get("ph"),
+            n_ps,
+            "ph2.ph",
+            np.complex64,
+        )
+        n_ps, n_ifg = ph2.shape
+
+        parms = {}
+        parms_path = root / "parms.mat"
+        if parms_path.exists():
+            parms = read_mat(parms_path)
+
+        if _mat_text(parms.get("small_baseline_flag"), "n").lower() != "y":
+            raise Stage6SbasError("stage6_sbas_unwrap requires small_baseline_flag='y'")
+
+        unwrap_method = _mat_text(parms.get("unwrap_method"), "3D")
+        scf_flag = _mat_text(
+            parms.get("unwrap_spatial_cost_func_flag"),
+            "n",
+        ).lower() == "y"
+        if scf_flag:
+            raise Stage6SbasError(
+                "unwrap_spatial_cost_func_flag='y' is not enabled in this patch. "
+                "Set it to 'n' to use the standard StaMPS SBAS 3-D time-space path."
+            )
+
+        drop = _drop_indices(parms.get("drop_ifg_index"), n_ifg)
+        drop_set = set(int(v) for v in drop)
+        unwrap_ifg = np.asarray(
+            [index for index in range(1, n_ifg + 1) if index not in drop_set],
+            dtype=np.int64,
+        )
+        if unwrap_ifg.size == 0:
+            raise Stage6SbasError("No interferograms remain after drop_ifg_index")
+        unwrap_ix = unwrap_ifg - 1
+
+        day, ifgday_ix_all, bperp_all, network_source = load_sbas_network(root, n_ifg)
+        ifgday_ix = ifgday_ix_all[unwrap_ix, :]
+        bperp = bperp_all[unwrap_ix]
+
+        pm2 = read_mat(root / "pm2.mat")
+        bp2 = read_mat_variables(root / "bp2.mat", ("bperp_mat",))
+        bperp_mat = _as_rows(
+            bp2.get("bperp_mat"),
+            n_ps,
+            "bp2.bperp_mat",
+            np.float32,
+        )
+        if bperp_mat.shape[1] != n_ifg:
+            raise Stage6SbasError(
+                f"bp2.bperp_mat has {bperp_mat.shape[1]} columns; expected {n_ifg}"
+            )
+
+        unwrap_patch_phase = _mat_text(
+            parms.get("unwrap_patch_phase"),
+            "n",
+        ).lower() == "y"
+        phase_restore = np.zeros((n_ps, n_ifg), dtype=np.float32)
+        patch_phase_for_restore: np.ndarray | None = None
+
+        if unwrap_patch_phase:
+            ph_patch = _as_rows(
+                pm2.get("ph_patch"),
+                n_ps,
+                "pm2.ph_patch",
+                np.complex64,
+            )
+            if ph_patch.shape[1] != n_ifg:
+                raise Stage6SbasError(
+                    f"pm2.ph_patch has {ph_patch.shape[1]} columns; expected {n_ifg}"
+                )
+            ph_w = _normalize_complex(ph_patch)
+            patch_phase_for_restore = ph_w.copy()
+        else:
+            rc_path = root / "rc2.mat"
+            if rc_path.exists():
+                try:
+                    ph_w = _as_rows(
+                        read_mat_variables(rc_path, ("ph_rc",)).get("ph_rc"),
+                        n_ps,
+                        "rc2.ph_rc",
+                        np.complex64,
+                    )
+                except Exception:
+                    ph_w = ph2.astype(np.complex64, copy=True)
+            else:
+                ph_w = ph2.astype(np.complex64, copy=True)
+
+            k_raw = pm2.get("K_ps")
+            if k_raw is not None and np.asarray(k_raw).size == n_ps:
+                K_ps = _as_vector(k_raw, n_ps, "pm2.K_ps", np.float32)
+                ph_w *= np.exp(1j * K_ps[:, None] * bperp_mat)
+
+        # StaMPS SBAS SCLA subtraction/add-back, when a previous iteration exists.
+        for scla_name in ("scla_smooth_sb2.mat", "scla_smooth2.mat"):
+            scla_path = root / scla_name
+            if not scla_path.exists():
+                continue
+            scla = read_mat(scla_path)
+            k_uw = scla.get("K_ps_uw")
+            if k_uw is not None and np.asarray(k_uw).size == n_ps:
+                K_uw = _as_vector(k_uw, n_ps, f"{scla_name}.K_ps_uw", np.float32)
+                correction = K_uw[:, None] * bperp_mat
+                ph_w *= np.exp(-1j * correction)
+                phase_restore += correction
+            ramp = scla.get("ph_ramp")
+            if ramp is not None and np.asarray(ramp).size:
+                ramp_arr = _as_rows(ramp, n_ps, f"{scla_name}.ph_ramp", np.float32)
+                if ramp_arr.shape == ph_w.shape:
+                    ph_w *= np.exp(-1j * ramp_arr)
+                    phase_restore += ramp_arr
+            break
+
+        ph_w = _normalize_complex(ph_w)
+
+        pix_size = float(_scalar(parms.get("unwrap_grid_size"), 20.0))
+        prefilt_win = int(round(_scalar(parms.get("unwrap_gold_n_win"), 32.0)))
+        gold_alpha = float(_scalar(parms.get("unwrap_gold_alpha"), 0.8))
+        gold_flag = _mat_text(parms.get("unwrap_prefilter_flag"), "y").lower() == "y"
+        if pix_size <= 0:
+            pix_size = 20.0
+        if prefilt_win <= 0:
+            prefilt_win = 32
+
+        xy = _as_rows(ps2.get("xy"), n_ps, "ps2.xy", np.float32)
+        if xy.shape[1] < 3:
+            raise Stage6SbasError("ps2.xy must contain id, x and y columns")
+        x_coord = xy[:, 1]
+        y_coord = xy[:, 2]
+        grid_x_min = float(np.min(x_coord))
+        grid_y_min = float(np.min(y_coord))
+        grid_i = np.ceil((y_coord - np.float32(grid_y_min) + np.float32(1e-3)) / np.float32(pix_size)).astype(np.int64)
+        grid_j = np.ceil((x_coord - np.float32(grid_x_min) + np.float32(1e-3)) / np.float32(pix_size)).astype(np.int64)
+        if grid_i.size and int(np.max(grid_i)) > 1:
+            maximum = int(np.max(grid_i))
+            grid_i[grid_i == maximum] = maximum - 1
+        if grid_j.size and int(np.max(grid_j)) > 1:
+            maximum = int(np.max(grid_j))
+            grid_j[grid_j == maximum] = maximum - 1
+        n_i = int(np.max(grid_i)) if grid_i.size else 1
+        n_j = int(np.max(grid_j)) if grid_j.size else 1
+        if min(n_i, n_j) < prefilt_win:
+            raise Stage6SbasError(
+                f"Minimum resampled grid dimension {min(n_i, n_j)} "
+                f"is smaller than prefilter window {prefilt_win}"
+            )
+
+        ph_in = ph_w[:, unwrap_ix].astype(np.complex64)
+        lin0 = ((grid_j - 1) * n_i + (grid_i - 1)).astype(np.int64)
+        group_lin, grouped_cols = ported._group_reduce_by_index(ph_in, lin0)
+        first_grid = ported._accumulate_grid_column(
+            group_lin,
+            grouped_cols[:, 0],
+            n_i * n_j,
+        )
+        nz_flat = first_grid != 0
+        if not np.any(nz_flat):
+            raise Stage6SbasError("uw_grid has no non-zero points")
+        nz_lin = np.flatnonzero(nz_flat)
+        nz_i = nz_lin % n_i + 1
+        nz_j = nz_lin // n_i + 1
+        n_grid_ps = int(nz_lin.size)
+
+        grid_phase = np.zeros((n_grid_ps, unwrap_ix.size), dtype=np.complex64)
+        grid_lowpass = np.zeros_like(grid_phase)
+        grid_workers = max(1, int(io_workers) if int(io_workers) > 0 else min(8, os.cpu_count() or 1))
+
+        def _grid_column(index: int) -> tuple[int, np.ndarray, np.ndarray]:
+            flat = ported._accumulate_grid_column(
+                group_lin,
+                grouped_cols[:, index],
+                n_i * n_j,
+            )
+            grid2d = flat.reshape((n_i, n_j), order="F")
+            filtered, lowpass = ported._wrap_filt_global(
+                grid2d,
+                n_win=prefilt_win,
+                alpha=gold_alpha,
+                low_flag="y",
+            )
+            selected = (
+                filtered.reshape(-1, order="F")[nz_flat]
+                if gold_flag
+                else grid2d.reshape(-1, order="F")[nz_flat]
+            )
+            low_selected = lowpass.reshape(-1, order="F")[nz_flat]
+            return (
+                index,
+                np.asarray(selected, dtype=np.complex64),
+                np.asarray(low_selected, dtype=np.complex64),
+            )
+
+        print(
+            "[STAGE6_SBAS] "
+            f"n_ps={n_ps}, n_ifg={n_ifg}, selected_ifg={unwrap_ix.size}, "
+            f"n_image={day.size}, grid={n_i}x{n_j}, grid_ps={n_grid_ps}, "
+            f"network_source={network_source}",
+            flush=True,
+        )
+
+        with ThreadPoolExecutor(max_workers=grid_workers) as pool:
+            futures = [pool.submit(_grid_column, index) for index in range(unwrap_ix.size)]
+            completed = 0
+            for future in as_completed(futures):
+                index, column, low_column = future.result()
+                grid_phase[:, index] = column
+                grid_lowpass[:, index] = low_column
+                completed += 1
+                if progress and (completed == unwrap_ix.size or completed % max(1, unwrap_ix.size // 20) == 0):
+                    print(
+                        "[STAGE6_SBAS][GRID] "
+                        f"{completed}/{unwrap_ix.size} "
+                        f"({100.0 * completed / unwrap_ix.size:.1f}%)",
+                        flush=True,
+                    )
+
+        nzix = nz_flat.reshape((n_i, n_j), order="F")
+        grid_ij = np.column_stack((grid_i, grid_j)).astype(np.float64)
+        xy_grid = np.column_stack(
+            (
+                np.arange(1, n_grid_ps + 1, dtype=np.float64),
+                (nz_j.astype(np.float64) - 0.5) * pix_size,
+                (nz_i.astype(np.float64) - 0.5) * pix_size,
+            )
+        )
+        ij_grid = np.column_stack((nz_i, nz_j)).astype(np.float64)
+        uw_grid_payload = {
+            "ph": grid_phase,
+            "ph_in": ph_in,
+            "ph_lowpass": grid_lowpass,
+            "ph_uw_predef": np.empty((0, 0), dtype=np.float32),
+            "ph_in_predef": np.empty((0, 0), dtype=np.complex64),
+            "xy": xy_grid,
+            "ij": ij_grid,
+            "nzix": nzix,
+            "grid_x_min": np.asarray(grid_x_min, dtype=np.float32),
+            "grid_y_min": np.asarray(grid_y_min, dtype=np.float32),
+            "n_i": np.asarray(n_i, dtype=np.float32),
+            "n_j": np.asarray(n_j, dtype=np.float32),
+            "n_ifg": np.asarray(unwrap_ix.size, dtype=np.float64),
+            "n_ps": np.asarray(n_grid_ps, dtype=np.float64),
+            "grid_ij": grid_ij,
+            "pix_size": np.asarray(pix_size, dtype=np.float64),
+        }
+        write_mat(root / "uw_grid.mat", uw_grid_payload)
+
+        uw_interp_payload = ported._build_uw_interp_payload(
+            root,
+            uw_grid_payload,
+            triangle_path=triangle_path,
+        )
+        write_mat(root / "uw_interp.mat", uw_interp_payload)
+
+        la_flag = _mat_text(parms.get("unwrap_la_error_flag"), "y").lower() == "y"
+        time_win = float(_scalar(parms.get("unwrap_time_win"), 36.0))
+        max_topo_err = float(_scalar(parms.get("max_topo_err"), 15.0))
+        wavelength = float(_scalar(parms.get("lambda"), 0.0555))
+        mean_range = float(_scalar(ps2.get("mean_range"), 830000.0))
+        mean_incidence = float(_scalar(ps2.get("mean_incidence"), math.radians(23.0)))
+        denominator = wavelength * mean_range * math.sin(mean_incidence) / (4.0 * math.pi)
+        max_K = max_topo_err / denominator
+        n_trial_wraps = float(np.ptp(bperp_all)) * max_K / TWO_PI
+
+        G, dph_noise, dph_space_uw, network_meta = compute_sbas_space_time(
+            uw_ph=grid_phase,
+            ph_lowpass=grid_lowpass,
+            edgs=uw_interp_payload.get("edgs"),
+            day=day,
+            ifgday_ix=ifgday_ix,
+            bperp=bperp,
+            time_win=time_win,
+            n_trial_wraps=n_trial_wraps,
+            unwrap_method=unwrap_method,
+            la_flag=la_flag,
+            edge_chunk=edge_chunk,
+            anneal_workers=anneal_workers,
+            anneal_runs=anneal_runs,
+            strict_anneal=strict_anneal,
+            progress=progress,
+            work_dir=work_dir,
+        )
+
+        rowix = np.asarray(uw_interp_payload.get("rowix"), dtype=np.float64).reshape((n_i - 1, n_j), order="F").copy()
+        colix = np.asarray(uw_interp_payload.get("colix"), dtype=np.float64).reshape((n_i, n_j - 1), order="F").copy()
+        Z = np.asarray(uw_interp_payload.get("Z"), dtype=np.int64).reshape((n_i, n_j), order="F")
+        n_edge = int(round(_scalar(uw_interp_payload.get("n_edge"), 0)))
+        grid_edges = np.concatenate(
+            (
+                np.abs(colix[np.abs(colix) > 0]),
+                np.abs(rowix[np.abs(rowix) > 0]),
+            )
+        ).astype(np.int64)
+        n_edges = np.bincount(grid_edges, minlength=n_edge + 1)[1:]
+
+        sigsq_noise = (
+            np.nanstd(np.asarray(dph_noise), axis=1)
+            / TWO_PI
+        ) ** 2
+        bad = ~np.isfinite(sigsq_noise)
+        row_abs = np.abs(np.nan_to_num(rowix, nan=0.0)).astype(np.int64)
+        col_abs = np.abs(np.nan_to_num(colix, nan=0.0)).astype(np.int64)
+        bad_lookup = np.zeros(n_edge + 1, dtype=bool)
+        bad_lookup[np.flatnonzero(bad) + 1] = True
+        rowix[bad_lookup[row_abs]] = np.nan
+        colix[bad_lookup[col_abs]] = np.nan
+
+        costscale = 100.0
+        nshortcycle = 200.0
+        maxshort = 32000
+        sigsq_raw = np.rint(
+            sigsq_noise * (nshortcycle**2) / costscale * n_edges
+        )
+        sigsq = np.ones(n_edge, dtype=np.int16)
+        finite = np.isfinite(sigsq_raw)
+        sigsq[finite] = np.clip(
+            sigsq_raw[finite],
+            1,
+            np.iinfo(np.int16).max,
+        ).astype(np.int16)
+
+        nzrowix = np.abs(rowix) > 0
+        nzcolix = np.abs(colix) > 0
+        rowcost_base = np.zeros((n_i - 1, n_j * 4), dtype=np.int16)
+        colcost_base = np.zeros((n_i, (n_j - 1) * 4), dtype=np.int16)
+        rowcost_base[:, 2::4] = maxshort
+        colcost_base[:, 2::4] = maxshort
+        rowcost_base[:, 3::4] = (
+            np.asarray(~np.isnan(rowix), dtype=np.int16)
+            * (-1 - maxshort)
+            + 1
+        ).astype(np.int16)
+        colcost_base[:, 3::4] = (
+            np.asarray(~np.isnan(colix), dtype=np.int16)
+            * (-1 - maxshort)
+            + 1
+        ).astype(np.int16)
+        rowstd = np.ones(rowix.shape, dtype=np.int16)
+        colstd = np.ones(colix.shape, dtype=np.int16)
+        rowstd[nzrowix] = sigsq[np.abs(rowix[nzrowix]).astype(np.int64) - 1]
+        colstd[nzcolix] = sigsq[np.abs(colix[nzcolix]).astype(np.int64) - 1]
+        rowcost_base[:, 1::4] = rowstd
+        colcost_base[:, 1::4] = colstd
+
+        snaphu_exe = ported._resolve_external_tool("snaphu", snaphu_path)
+        ph_uw_some = np.memmap(
+            work_dir / "ph_uw_grid.f32",
+            mode="w+",
+            dtype=np.float32,
+            shape=(n_grid_ps, unwrap_ix.size),
+        )
+        msd_some = np.zeros(unwrap_ix.size, dtype=np.float64)
+        snaphu_root.mkdir(parents=True, exist_ok=True)
+
+        completed = 0
+        snaphu_started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=snaphu_workers) as pool:
+            futures = [
+                pool.submit(
+                    _run_snaphu_column,
+                    index=index,
+                    work_root=snaphu_root,
+                    snaphu_exe=snaphu_exe,
+                    ncol=n_j,
+                    uw_ph=grid_phase,
+                    Z=Z,
+                    nzix=nzix,
+                    rowix=rowix,
+                    colix=colix,
+                    nzrowix=nzrowix,
+                    nzcolix=nzcolix,
+                    rowcost_base=rowcost_base,
+                    colcost_base=colcost_base,
+                    dph_noise=dph_noise,
+                    dph_space_uw=dph_space_uw,
+                    nshortcycle=nshortcycle,
+                    ported=ported,
+                )
+                for index in range(unwrap_ix.size)
+            ]
+            for future in as_completed(futures):
+                index, values, msd_value = future.result()
+                ph_uw_some[:, index] = values
+                msd_some[index] = msd_value
+                completed += 1
+                print(
+                    "[STAGE6_SBAS][SNAPHU] "
+                    f"{completed}/{unwrap_ix.size} "
+                    f"({100.0 * completed / unwrap_ix.size:.1f}%) "
+                    f"elapsed={time.perf_counter() - snaphu_started:.1f}s",
+                    flush=True,
+                )
+        ph_uw_some.flush()
+
+        write_mat(
+            root / "uw_phaseuw.mat",
+            {
+                "ph_uw": np.asarray(ph_uw_some),
+                "msd": msd_some.reshape(-1, 1),
+            },
+        )
+
+        gridix_flat = np.zeros(n_i * n_j, dtype=np.int64)
+        nz_flat_f = np.flatnonzero(nzix.reshape(-1, order="F"))
+        gridix_flat[nz_flat_f] = np.arange(1, n_grid_ps + 1, dtype=np.int64)
+        gridix = gridix_flat.reshape((n_i, n_j), order="F")
+        ps_grid_idx = gridix[grid_i - 1, grid_j - 1]
+
+        ph_uw_selected = np.full(
+            (n_ps, unwrap_ix.size),
+            np.nan,
+            dtype=np.float32,
+        )
+        valid = ps_grid_idx > 0
+        if np.any(valid):
+            grid_values = np.asarray(ph_uw_some[ps_grid_idx[valid] - 1, :], dtype=np.float32)
+            ph_uw_selected[valid, :] = (
+                grid_values
+                + np.angle(
+                    ph_in[valid, :]
+                    * np.exp(-1j * grid_values)
+                ).astype(np.float32)
+            )
+            ph_uw_selected[valid, :] += phase_restore[valid, :][:, unwrap_ix]
+
+        if unwrap_patch_phase and patch_phase_for_restore is not None and (root / "rc2.mat").exists():
+            rc = _as_rows(
+                read_mat_variables(root / "rc2.mat", ("ph_rc",)).get("ph_rc"),
+                n_ps,
+                "rc2.ph_rc",
+                np.complex64,
+            )
+            residual = np.angle(
+                rc[:, unwrap_ix]
+                * np.conj(patch_phase_for_restore[:, unwrap_ix])
+            ).astype(np.float32)
+            ph_uw_selected += residual
+
+        ph_uw = np.zeros((n_ps, n_ifg), dtype=np.float32)
+        msd = np.zeros(n_ifg, dtype=np.float32)
+        ph_uw[:, unwrap_ix] = ph_uw_selected
+        msd[unwrap_ix] = msd_some.astype(np.float32)
+        write_mat(
+            root / "phuw2.mat",
+            {
+                "ph_uw": ph_uw,
+                "msd": msd.reshape(-1, 1),
+            },
+        )
+
+        debug = {
+            "status": "completed",
+            "dataset_root": str(root),
+            "duration_sec": time.perf_counter() - started,
+            "network_source": str(network_source),
+            "n_ps": int(n_ps),
+            "n_ifg": int(n_ifg),
+            "selected_ifg": int(unwrap_ix.size),
+            "n_image": int(day.size),
+            "grid_shape": [int(n_i), int(n_j)],
+            "grid_ps": int(n_grid_ps),
+            "snaphu_workers": int(snaphu_workers),
+            "edge_chunk": int(edge_chunk),
+            "anneal_workers": int(anneal_workers),
+            "anneal_runs": int(anneal_runs),
+            "strict_anneal": bool(strict_anneal),
+            "network": network_meta,
+            "backup": str(backup) if backup is not None else None,
+        }
+        _write_json(debug_path, debug)
+
+        if not keep_work:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        return (
+            f"Stage 6 SBAS unwrapped {n_ps} PS across {n_ifg} interferograms "
+            f"({unwrap_ix.size} processed)"
+        )
+
+    except Exception as exc:
+        _write_json(
+            debug_path,
+            {
+                "status": "failed",
+                "dataset_root": str(root),
+                "duration_sec": time.perf_counter() - started,
+                "exception": f"{type(exc).__name__}: {exc}",
+                "backup": str(backup) if backup is not None else None,
+            },
+        )
+        raise
+
+
+def _preflight(dataset_root: Path) -> None:
+    root = dataset_root.expanduser().resolve()
+    ps2 = read_mat(root / "ps2.mat")
+    n_ps = int(round(_scalar(ps2.get("n_ps"), 0)))
+    ph_shape = np.asarray(
+        read_mat_variables(root / "ph2.mat", ("ph",)).get("ph")
+    ).shape
+    if len(ph_shape) != 2:
+        raise Stage6SbasError(f"ph2.ph has invalid shape {ph_shape}")
+    if ph_shape[0] != n_ps and ph_shape[1] == n_ps:
+        ph_shape = (ph_shape[1], ph_shape[0])
+    n_ifg = int(ph_shape[1])
+    day, ifgday_ix, bperp, source = load_sbas_network(root, n_ifg)
+    G, day_active, _ = _active_network(day, ifgday_ix)
+    print("Stage 6 SBAS preflight")
+    print(f"dataset       : {root}")
+    print(f"network source: {source}")
+    print(f"n_ps          : {n_ps}")
+    print(f"n_ifg         : {n_ifg}")
+    print(f"n_image       : {day.size}")
+    print(f"active images : {day_active.size}")
+    print(f"rank(G)       : {np.linalg.matrix_rank(G)}")
+    print(f"expected rank : {day_active.size - 1}")
+    print(f"bperp range   : {np.ptp(bperp):.6f}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="StaMPS-compatible multiple-master SBAS Stage 6."
+    )
+    parser.add_argument("--dataset", required=True, type=Path)
+    parser.add_argument("--io-workers", type=int, default=8)
+    parser.add_argument("--triangle", default=None)
+    parser.add_argument("--snaphu", default=None)
+    parser.add_argument("--preflight", action="store_true")
+    args = parser.parse_args()
+
+    if args.preflight:
+        _preflight(args.dataset)
+        return 0
+
+    result = stage6_sbas_unwrap(
+        args.dataset,
+        backend="auto",
+        io_workers=args.io_workers,
+        enable_mat_cache=False,
+        triangle_path=args.triangle,
+        snaphu_path=args.snaphu,
+    )
+    print(result)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

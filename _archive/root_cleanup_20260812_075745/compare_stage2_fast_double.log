@@ -1,0 +1,152 @@
+
+========================================================================
+PATCH: PATCH_275
+========================================================================
+
+K_ps
+  shape fast : (7568,)
+  shape ref  : (7568,)
+  max abs     : 6.674838826190715e-10
+  median abs  : 5.151587481795096e-11
+  p99 abs     : 2.2409783762628237e-10
+  max relative: 0.0006748334091448279
+  p99 relative: 5.105260423078847e-06
+
+C_ps
+  shape fast : (7568,)
+  shape ref  : (7568,)
+  max abs     : 1.6510924408935646e-07
+  median abs  : 3.3069015650810663e-09
+  p99 abs     : 1.9610558279481433e-08
+  max relative: 0.0009761575295493604
+  p99 relative: 5.328140488238901e-06
+
+coh_ps
+  shape fast : (7568,)
+  shape ref  : (7568,)
+  max abs     : 5.819588971833767e-08
+  median abs  : 1.3754659078379916e-09
+  p99 abs     : 6.830584836636787e-09
+  max relative: 2.0332523243384082e-07
+  p99 relative: 2.536060341929649e-08
+
+ph_patch
+  shape fast : (7568, 763)
+  shape ref  : (7568, 763)
+  max abs     : 5.826339735381899e-05
+  median abs  : 5.960464477539063e-08
+  p99 abs     : 2.0116567611694336e-07
+  max relative: 5.8263397252611856e-05
+  p99 relative: 2.0116567121752543e-07
+
+ph_res
+  shape fast : (7568, 763)
+  shape ref  : (7568, 763)
+  max abs     : 5.829334259033203e-05
+  median abs  : 0.0
+  p99 abs     : 2.384185791015625e-07
+  max relative: 0.5718932913484619
+  p99 relative: 2.9814426607860247e-06
+
+ph_weight
+  shape fast : (7568, 763)
+  shape ref  : (7568, 763)
+  max abs     : 1.3328003749250113e-07
+  median abs  : 0.0
+  p99 abs     : 5.960464477539063e-08
+  max relative: 1.3328004351696476e-07
+  p99 relative: 5.960464846793007e-08
+
+Nr
+  shape fast : (100,)
+  shape ref  : (100,)
+  max abs     : 0.0
+  median abs  : 0.0
+  p99 abs     : 0.0
+  max relative: 0.0
+  p99 relative: 0.0
+
+coh_bins
+  shape fast : (100,)
+  shape ref  : (100,)
+  max abs     : 0.0
+  median abs  : 0.0
+  p99 abs     : 0.0
+  max relative: 0.0
+  p99 relative: 0.0
+
+========================================================================
+PATCH: PATCH_276
+========================================================================
+
+K_ps
+  shape fast : (30149,)
+  shape ref  : (30149,)
+  max abs     : 8.238601666132319e-07
+  median abs  : 5.993880587175371e-11
+  p99 abs     : 2.65364990032573e-07
+  max relative: 0.28916108846454563
+  p99 relative: 0.00034738114181930355
+
+C_ps
+  shape fast : (30149,)
+  shape ref  : (30149,)
+  max abs     : 1.6433538283351645e-05
+  median abs  : 4.1422711320043826e-09
+  p99 abs     : 4.222979992155046e-07
+  max relative: 0.0025442545193222906
+  p99 relative: 1.7500623024772857e-05
+
+coh_ps
+  shape fast : (30149,)
+  shape ref  : (30149,)
+  max abs     : 1.974535463800109e-06
+  median abs  : 1.4391312586070626e-09
+  p99 abs     : 1.7110806325604246e-07
+  max relative: 1.0142115441109704e-05
+  p99 relative: 4.306555233032779e-07
+
+ph_patch
+  shape fast : (30149, 763)
+  shape ref  : (30149, 763)
+  max abs     : 0.0012286236434576403
+  median abs  : 5.960464477539063e-08
+  p99 abs     : 1.0069657447333802e-05
+  max relative: 0.0012286236860202758
+  p99 relative: 1.0069657485253083e-05
+
+ph_res
+  shape fast : (30149, 763)
+  shape ref  : (30149, 763)
+  max abs     : 0.0012507736682891846
+  median abs  : 0.0
+  p99 abs     : 2.2649765014648438e-06
+  max relative: 3.2228814254896405
+  p99 relative: 7.67343277950968e-06
+
+ph_weight
+  shape fast : (30149, 763)
+  shape ref  : (30149, 763)
+  max abs     : 0.00047631618605673313
+  median abs  : 0.0
+  p99 abs     : 7.304730995753671e-06
+  max relative: 0.0004763161487670863
+  p99 relative: 8.052199661711762e-06
+
+Nr
+  shape fast : (100,)
+  shape ref  : (100,)
+  max abs     : 0.0
+  median abs  : 0.0
+  p99 abs     : 0.0
+  max relative: 0.0
+  p99 relative: 0.0
+
+coh_bins
+  shape fast : (100,)
+  shape ref  : (100,)
+  max abs     : 0.0
+  median abs  : 0.0
+  p99 abs     : 0.0
+  max relative: 0.0
+  p99 relative: 0.0

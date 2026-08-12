@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="430" viewBox="0 0 1280 430" role="img" aria-labelledby="title desc">
+  <title id="title">pySTAMPS workflow overview</title>
+  <desc id="desc">A workflow diagram showing copy, inspect, dry-run, execute, verify, and review reports.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0f4f64"/>
+    </linearGradient>
+    <linearGradient id="line" x1="120" y1="250" x2="1140" y2="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#37d7c4"/>
+      <stop offset="0.55" stop-color="#6ea8ff"/>
+      <stop offset="1" stop-color="#f0a33a"/>
+    </linearGradient>
+    <style>
+      .title { fill: #f8fbff; font: 700 38px Arial, Helvetica, sans-serif; }
+      .sub { fill: #c8d5df; font: 500 17px Arial, Helvetica, sans-serif; }
+      .card { fill: #ffffff; stroke: #d7e0e7; stroke-width: 1.4; rx: 18; }
+      .num { fill: #ffffff; font: 700 20px Arial, Helvetica, sans-serif; }
+      .label { fill: #17212b; font: 700 20px Arial, Helvetica, sans-serif; }
+      .copy { fill: #5c6a73; font: 500 14px Arial, Helvetica, sans-serif; }
+      .cmd { fill: #0f4f64; font: 700 12px Arial, Helvetica, sans-serif; letter-spacing: .03em; }
+      .arrow { stroke: url(#line); stroke-width: 5; fill: none; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="430" rx="26" fill="url(#bg)"/>
+  <text x="54" y="70" class="title">Copy first, then run only what you need</text>
+  <text x="54" y="102" class="sub">The docs now follow the same operational path as the code: dataset copy, status, dry-run, stage execution, verification, and reports.</text>
+
+  <path d="M122 250H1158" class="arrow"/>
+  <polygon points="1168,250 1148,238 1148,262" fill="#f0a33a"/>
+
+  <g transform="translate(54 150)">
+    <rect width="176" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#0d9488"/><text x="28" y="41" class="num">1</text>
+    <text x="24" y="78" class="label">Copy</text>
+    <text x="24" y="106" class="copy">Protect the source</text>
+    <text x="24" y="126" class="copy">dataset before writes.</text>
+    <text x="24" y="150" class="cmd">cp -a SOURCE RUN</text>
+  </g>
+  <g transform="translate(260 150)">
+    <rect width="176" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#3559e0"/><text x="28" y="41" class="num">2</text>
+    <text x="24" y="78" class="label">Inspect</text>
+    <text x="24" y="106" class="copy">Discover patches and</text>
+    <text x="24" y="126" class="copy">current artifacts.</text>
+    <text x="24" y="150" class="cmd">pystamps status</text>
+  </g>
+  <g transform="translate(466 150)">
+    <rect width="176" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#0d9488"/><text x="28" y="41" class="num">3</text>
+    <text x="24" y="78" class="label">Dry-run</text>
+    <text x="24" y="106" class="copy">Preview selected</text>
+    <text x="24" y="126" class="copy">stage work.</text>
+    <text x="24" y="150" class="cmd">run --dry-run</text>
+  </g>
+  <g transform="translate(672 150)">
+    <rect width="176" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#c36a1d"/><text x="28" y="41" class="num">4</text>
+    <text x="24" y="78" class="label">Execute</text>
+    <text x="24" y="106" class="copy">Run a full chain or</text>
+    <text x="24" y="126" class="copy">one stage range.</text>
+    <text x="24" y="150" class="cmd">run 1..8</text>
+  </g>
+  <g transform="translate(878 150)">
+    <rect width="176" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#3559e0"/><text x="28" y="41" class="num">5</text>
+    <text x="24" y="78" class="label">Verify</text>
+    <text x="24" y="106" class="copy">Compare run output</text>
+    <text x="24" y="126" class="copy">with a golden tree.</text>
+    <text x="24" y="150" class="cmd">pystamps verify</text>
+  </g>
+  <g transform="translate(1084 150)">
+    <rect width="142" height="166" class="card"/>
+    <circle cx="34" cy="34" r="18" fill="#0d9488"/><text x="28" y="41" class="num">6</text>
+    <text x="24" y="78" class="label">Review</text>
+    <text x="24" y="106" class="copy">Use native gate</text>
+    <text x="24" y="126" class="copy">JSON evidence.</text>
+    <text x="24" y="150" class="cmd">_reports/</text>
+  </g>
+</svg>

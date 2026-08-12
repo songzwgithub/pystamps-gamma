@@ -1,0 +1,56 @@
+
+!/.github/
+!/.github/workflows/
+!/.github/workflows/**
+# Auto
+# Generated metadata
+# Large repo-only assets not shipped in the package
+# Local agent/runtime state
+*.bak
+*.egg-info/
+*.mat
+*.orig
+*.py[cod]
+*.rej
+*.temp
+*.tif *.tiff *.h5 *.grd *.vrt *.nc *.dem *.zip
+*.tmp
+*~
+.DS_Store
+.cache/
+.env
+.pytest_cache/
+.ruff_cache/
+.runs/
+.tmp/
+.tmp_pytest/
+.venv/
+.vscode/
+/.agent-memory/
+/.agents/
+/.build-deps/
+/.build-venv/
+/.codex/
+/.github/
+/.github/*
+/.ralph/
+/.tmp_build/
+/.tmp_pip/
+/.tmp_test/
+/.tmp_test_us012/
+/AGENTS.md
+/PLANS.md
+/build/
+/pystamps-stage2-rng-*/
+/pystamps/kernels/_stage2_native.cpython-*.so
+/pytest-of-rdelprete/
+/target/
+PROCESS/ OUTPUT/ temp/
+StaMPS/
+__pycache__/
+__pycache__/ *.pyc
+dist/
+inputs_and_outputs/
+notebooks/tmp/
+summary_final_report.md
+tmp/

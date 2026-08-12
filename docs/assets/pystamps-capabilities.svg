@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="500" viewBox="0 0 1280 500" role="img" aria-labelledby="title desc">
+  <title id="title">pySTAMPS capability map</title>
+  <desc id="desc">A capability map showing interfaces, dataset model, stage runtime, native Rust, verification, and web console.</desc>
+  <defs>
+    <style>
+      .frame { fill: #f8fbfd; stroke: #dce4ea; stroke-width: 1.4; rx: 24; }
+      .hub { fill: #101820; rx: 22; }
+      .card { fill: #ffffff; stroke: #dce4ea; stroke-width: 1.4; rx: 16; }
+      .line { stroke: #8fa4b4; stroke-width: 3; fill: none; }
+      .title { fill: #17212b; font: 700 36px Arial, Helvetica, sans-serif; }
+      .sub { fill: #5c6a73; font: 500 16px Arial, Helvetica, sans-serif; }
+      .hub-title { fill: #f8fbff; font: 700 27px Arial, Helvetica, sans-serif; }
+      .hub-copy { fill: #cad7e0; font: 500 15px Arial, Helvetica, sans-serif; }
+      .label { fill: #17212b; font: 700 19px Arial, Helvetica, sans-serif; }
+      .copy { fill: #5c6a73; font: 500 14px Arial, Helvetica, sans-serif; }
+      .tag { fill: #0f4f64; font: 700 12px Arial, Helvetica, sans-serif; letter-spacing: .07em; }
+    </style>
+  </defs>
+  <rect x="1" y="1" width="1278" height="498" class="frame"/>
+  <text x="56" y="70" class="title">pySTAMPS capability map</text>
+  <text x="56" y="100" class="sub">The project is documented around the same responsibilities that appear in the package and Rust workspace.</text>
+
+  <rect x="430" y="170" width="420" height="160" class="hub"/>
+  <text x="486" y="222" class="hub-title">Dataset-centered stage runtime</text>
+  <text x="486" y="252" class="hub-copy">Discover PATCH_* folders, select a stage range, skip</text>
+  <text x="486" y="274" class="hub-copy">existing artifacts, execute Python or Rust paths, and</text>
+  <text x="486" y="296" class="hub-copy">return structured stage results.</text>
+
+  <path d="M356 154C398 154 410 190 430 218" class="line"/>
+  <path d="M924 154C882 154 870 190 850 218" class="line"/>
+  <path d="M356 364C398 364 410 310 430 282" class="line"/>
+  <path d="M924 364C882 364 870 310 850 282" class="line"/>
+  <path d="M640 390V330" class="line"/>
+
+  <g transform="translate(56 130)">
+    <rect width="300" height="104" class="card"/>
+    <text x="24" y="31" class="tag">INTERFACE</text>
+    <text x="24" y="62" class="label">Python CLI and API</text>
+    <text x="24" y="86" class="copy">status, run, verify, describe-inputs, backends</text>
+  </g>
+  <g transform="translate(924 130)">
+    <rect width="300" height="104" class="card"/>
+    <text x="24" y="31" class="tag">NATIVE RUST</text>
+    <text x="24" y="62" class="label">pystamps-native</text>
+    <text x="24" y="86" class="copy">stage execution, coverage, full-chain gate</text>
+  </g>
+  <g transform="translate(56 316)">
+    <rect width="300" height="104" class="card"/>
+    <text x="24" y="31" class="tag">DATA MODEL</text>
+    <text x="24" y="62" class="label">StaMPS-style dataset tree</text>
+    <text x="24" y="86" class="copy">patch artifacts plus merged .mat products</text>
+  </g>
+  <g transform="translate(924 316)">
+    <rect width="300" height="104" class="card"/>
+    <text x="24" y="31" class="tag">VERIFICATION</text>
+    <text x="24" y="62" class="label">Golden dataset comparison</text>
+    <text x="24" y="86" class="copy">tolerance manifest, audit, native gate reports</text>
+  </g>
+  <g transform="translate(490 390)">
+    <rect width="300" height="78" class="card"/>
+    <text x="24" y="31" class="tag">WEB CONSOLE</text>
+    <text x="24" y="58" class="copy">make web serves the local Rust run console</text>
+  </g>
+</svg>

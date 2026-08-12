@@ -1,0 +1,19 @@
+runtime:
+  # 同时计算两个空间patch
+  cpu_workers: 2
+
+  io_workers: 4
+  backend: auto
+
+  # Stage 2已有Rust原生内核时优先使用
+  stage2_kernel_backend: auto
+
+  # 每个patch内部使用15个线程
+  stage2_native_threads: 15
+
+  # 仅写最终pm1.mat，避免频繁写巨型检查点
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1
+
+  stage2_debug: false
+  enable_mat_stage_cache: true

@@ -1,0 +1,653 @@
+复用已有雷达坐标经纬度：
+  longitude: /mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon
+  latitude : /mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat
+
+提取振幅离散度PS候选点...
+D_A阈值筛选后候选点：17781344
+
+执行纯PS空间均衡优化...
+PS空间优化后候选点：757354
+候选点保留比例：0.0426
+
+Patch布局：
+  range patches  : 4
+  azimuth patches: 4
+  grid patch count: 16
+
+[1/15] 处理PATCH_1
+PATCH_1完成：69260个PS点
+
+[2/15] 处理PATCH_2
+PATCH_2完成：75559个PS点
+
+[3/15] 处理PATCH_3
+PATCH_3完成：75671个PS点
+
+[4/15] 处理PATCH_4
+PATCH_4完成：69486个PS点
+
+[5/15] 处理PATCH_5
+PATCH_5完成：70695个PS点
+
+[6/15] 处理PATCH_6
+PATCH_6完成：76791个PS点
+
+[7/15] 处理PATCH_7
+PATCH_7完成：78150个PS点
+
+[8/15] 处理PATCH_8
+PATCH_8完成：68277个PS点
+
+[9/15] 处理PATCH_9
+PATCH_9完成：53887个PS点
+
+[10/15] 处理PATCH_10
+PATCH_10完成：71704个PS点
+
+[11/15] 处理PATCH_11
+PATCH_11完成：51177个PS点
+
+[12/15] 处理PATCH_12
+PATCH_12完成：19382个PS点
+
+[13/15] 处理PATCH_13
+PATCH_13完成：38777个PS点
+
+[14/15] 处理PATCH_14
+PATCH_14完成：36044个PS点
+
+[15/15] 处理PATCH_15
+PATCH_15完成：2476个PS点
+
+======================================================
+GAMMA SBAS Stage-1准备完成
+======================================================
+D_A筛选候选点：17781344
+空间优化候选点：757354
+有效patch：15
+跳过patch：0
+输出目录：/mnt/vol-gdc28n1r/insar/cangzhou_P69/pystamps_sbas_ps_optimized
+{
+  "input_project": "/mnt/vol-gdc28n1r/insar/cangzhou_P69",
+  "output_dataset": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/pystamps_sbas_ps_optimized",
+  "processor": "gamma",
+  "processing_mode": "pure_ps_spatially_balanced",
+  "small_baseline_flag": "y",
+  "reference_date": "20201026",
+  "acquisition_count": 257,
+  "interferogram_count": 763,
+  "candidate_count_before_patch": 757354,
+  "candidate_count_after_da_threshold": 17781344,
+  "candidate_count_after_ps_optimization": 757354,
+  "candidate_retained_fraction": 0.0425926184207448,
+  "candidate_row_start": 0,
+  "candidate_row_stop": null,
+  "candidate_configuration": {
+    "max_invalid_interferograms": 1,
+    "minimum_patch_candidates": 500
+  },
+  "ps_optimization": {
+    "configuration": {
+      "enabled": true,
+      "cell_rows": 32,
+      "cell_cols": 32,
+      "max_candidates_per_cell": 32,
+      "global_max_candidates": 1000000,
+      "target_candidates_per_patch": 50000,
+      "min_range_patches": 1,
+      "min_azimuth_patches": 1,
+      "max_range_patches": 20,
+      "max_azimuth_patches": 20
+    },
+    "original_count": 17781344,
+    "valid_count": 17781344,
+    "selected_count": 757354,
+    "retained_fraction_of_valid": 0.0425926184207448,
+    "da_min": 0.10011966526508331,
+    "da_median": 0.2959417402744293,
+    "da_max": 0.4499943256378174,
+    "row_min": 29,
+    "row_max": 5497,
+    "col_min": 0,
+    "col_max": 5929
+  },
+  "auto_patch_layout": true,
+  "patch_layout": {
+    "mode": "automatic",
+    "selected_candidate_count": 757354,
+    "target_candidates_per_patch": 50000,
+    "desired_patch_count": 16,
+    "range_patches": 4,
+    "azimuth_patches": 4,
+    "actual_grid_patch_count": 16,
+    "estimated_candidates_per_patch": 47334.625,
+    "range_overlap": 50,
+    "azimuth_overlap": 100,
+    "candidate_row_span": 5469,
+    "candidate_col_span": 5930,
+    "candidate_spatial_aspect": 1.084293289449625
+  },
+  "patch_definition_count": 15,
+  "patch_count": 15,
+  "skipped_patch_count": 0,
+  "width": 5930,
+  "length": 5521,
+  "rslc_width": 23722,
+  "rslc_length": 5521,
+  "range_looks": 4,
+  "azimuth_looks": 1,
+  "wavelength_m": 0.055465759531382094,
+  "heading_degrees": -13.3403919,
+  "radar_lonlat": {
+    "longitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon",
+    "latitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat",
+    "map_longitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/dem_seg.lon",
+    "map_latitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/dem_seg.lat",
+    "dem_parameter_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.dem_par",
+    "dem_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.dem",
+    "lookup_table_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.20210211.lt_fine",
+    "radar_parameter_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.vv.mli.par",
+    "map_width": 7667,
+    "map_length": 6675,
+    "radar_width": 5930,
+    "radar_length": 5521,
+    "generated_map_coordinates": false,
+    "generated_radar_coordinates": false
+  },
+  "geometry_files": {
+    "longitude": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon",
+    "latitude": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat",
+    "height": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211.hgt"
+  },
+  "patches": [
+    {
+      "candidate_count": 69260,
+      "phase_shape": [
+        69260,
+        763
+      ],
+      "bperp_shape": [
+        69260,
+        763
+      ],
+      "da_min": 0.12391482293605804,
+      "da_median": 0.290169358253479,
+      "da_max": 0.33871838450431824,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.5878358898464421,
+      "mean_incidence_degrees": 33.68051553451829,
+      "mean_slant_range_m": 824204.9499936367,
+      "patch": "PATCH_1",
+      "initial_candidate_count": 70874,
+      "geometry_valid_count": 70874,
+      "phase_valid_count": 69260,
+      "range_bounds": [
+        1,
+        1532
+      ],
+      "azimuth_bounds": [
+        1,
+        1480
+      ]
+    },
+    {
+      "candidate_count": 75559,
+      "phase_shape": [
+        75559,
+        763
+      ],
+      "bperp_shape": [
+        75559,
+        763
+      ],
+      "da_min": 0.11211245507001877,
+      "da_median": 0.2908506989479065,
+      "da_max": 0.35207006335258484,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.5878364648484958,
+      "mean_incidence_degrees": 33.68054847970919,
+      "mean_slant_range_m": 824205.2463155265,
+      "patch": "PATCH_2",
+      "initial_candidate_count": 75560,
+      "geometry_valid_count": 75559,
+      "phase_valid_count": 75559,
+      "range_bounds": [
+        1,
+        1532
+      ],
+      "azimuth_bounds": [
+        1281,
+        2860
+      ]
+    },
+    {
+      "candidate_count": 75671,
+      "phase_shape": [
+        75671,
+        763
+      ],
+      "bperp_shape": [
+        75671,
+        763
+      ],
+      "da_min": 0.11509178578853607,
+      "da_median": 0.29212796688079834,
+      "da_max": 0.34608107805252075,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.5878531973892859,
+      "mean_incidence_degrees": 33.681507183676985,
+      "mean_slant_range_m": 824213.2424020757,
+      "patch": "PATCH_3",
+      "initial_candidate_count": 75671,
+      "geometry_valid_count": 75671,
+      "phase_valid_count": 75671,
+      "range_bounds": [
+        1,
+        1532
+      ],
+      "azimuth_bounds": [
+        2661,
+        4240
+      ]
+    },
+    {
+      "candidate_count": 69486,
+      "phase_shape": [
+        69486,
+        763
+      ],
+      "bperp_shape": [
+        69486,
+        763
+      ],
+      "da_min": 0.11114494502544403,
+      "da_median": 0.28665298223495483,
+      "da_max": 0.3621751070022583,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.5878334897874418,
+      "mean_incidence_degrees": 33.68037802126699,
+      "mean_slant_range_m": 824203.7555369667,
+      "patch": "PATCH_4",
+      "initial_candidate_count": 70050,
+      "geometry_valid_count": 70014,
+      "phase_valid_count": 69486,
+      "range_bounds": [
+        1,
+        1532
+      ],
+      "azimuth_bounds": [
+        4041,
+        5521
+      ]
+    },
+    {
+      "candidate_count": 70695,
+      "phase_shape": [
+        70695,
+        763
+      ],
+      "bperp_shape": [
+        70695,
+        763
+      ],
+      "da_min": 0.11315106600522995,
+      "da_median": 0.2932906746864319,
+      "da_max": 0.4498074948787689,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6153247623431229,
+      "mean_incidence_degrees": 35.255511912151356,
+      "mean_slant_range_m": 837742.7451163814,
+      "patch": "PATCH_5",
+      "initial_candidate_count": 73258,
+      "geometry_valid_count": 72385,
+      "phase_valid_count": 70695,
+      "range_bounds": [
+        1433,
+        3015
+      ],
+      "azimuth_bounds": [
+        1,
+        1480
+      ]
+    },
+    {
+      "candidate_count": 76791,
+      "phase_shape": [
+        76791,
+        763
+      ],
+      "bperp_shape": [
+        76791,
+        763
+      ],
+      "da_min": 0.10889117419719696,
+      "da_median": 0.29086142778396606,
+      "da_max": 0.4498443603515625,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6152624882779659,
+      "mean_incidence_degrees": 35.25194387104473,
+      "mean_slant_range_m": 837710.6262780775,
+      "patch": "PATCH_6",
+      "initial_candidate_count": 77912,
+      "geometry_valid_count": 76791,
+      "phase_valid_count": 76791,
+      "range_bounds": [
+        1433,
+        3015
+      ],
+      "azimuth_bounds": [
+        1281,
+        2860
+      ]
+    },
+    {
+      "candidate_count": 78150,
+      "phase_shape": [
+        78150,
+        763
+      ],
+      "bperp_shape": [
+        78150,
+        763
+      ],
+      "da_min": 0.10893860459327698,
+      "da_median": 0.29078301787376404,
+      "da_max": 0.4332634508609772,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6154444436226985,
+      "mean_incidence_degrees": 35.262369144357756,
+      "mean_slant_range_m": 837803.6035130987,
+      "patch": "PATCH_7",
+      "initial_candidate_count": 78150,
+      "geometry_valid_count": 78150,
+      "phase_valid_count": 78150,
+      "range_bounds": [
+        1433,
+        3015
+      ],
+      "azimuth_bounds": [
+        2661,
+        4240
+      ]
+    },
+    {
+      "candidate_count": 68277,
+      "phase_shape": [
+        68277,
+        763
+      ],
+      "bperp_shape": [
+        68277,
+        763
+      ],
+      "da_min": 0.10893860459327698,
+      "da_median": 0.28988009691238403,
+      "da_max": 0.4499835968017578,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6150723834224548,
+      "mean_incidence_degrees": 35.241051665159006,
+      "mean_slant_range_m": 837613.7166261739,
+      "patch": "PATCH_8",
+      "initial_candidate_count": 69988,
+      "geometry_valid_count": 68724,
+      "phase_valid_count": 68277,
+      "range_bounds": [
+        1433,
+        3015
+      ],
+      "azimuth_bounds": [
+        4041,
+        5521
+      ]
+    },
+    {
+      "candidate_count": 53887,
+      "phase_shape": [
+        53887,
+        763
+      ],
+      "bperp_shape": [
+        53887,
+        763
+      ],
+      "da_min": 0.11547847837209702,
+      "da_median": 0.30516669154167175,
+      "da_max": 0.4499938189983368,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6404473514270423,
+      "mean_incidence_degrees": 36.69493023710137,
+      "mean_slant_range_m": 850971.7192154858,
+      "patch": "PATCH_9",
+      "initial_candidate_count": 54964,
+      "geometry_valid_count": 54607,
+      "phase_valid_count": 53887,
+      "range_bounds": [
+        2916,
+        4497
+      ],
+      "azimuth_bounds": [
+        1,
+        1480
+      ]
+    },
+    {
+      "candidate_count": 71704,
+      "phase_shape": [
+        71704,
+        763
+      ],
+      "bperp_shape": [
+        71704,
+        763
+      ],
+      "da_min": 0.12167973071336746,
+      "da_median": 0.31218281388282776,
+      "da_max": 0.4499848186969757,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.641629641241753,
+      "mean_incidence_degrees": 36.7626704536456,
+      "mean_slant_range_m": 851612.9725856605,
+      "patch": "PATCH_10",
+      "initial_candidate_count": 75256,
+      "geometry_valid_count": 71704,
+      "phase_valid_count": 71704,
+      "range_bounds": [
+        2916,
+        4497
+      ],
+      "azimuth_bounds": [
+        1281,
+        2860
+      ]
+    },
+    {
+      "candidate_count": 51177,
+      "phase_shape": [
+        51177,
+        763
+      ],
+      "bperp_shape": [
+        51177,
+        763
+      ],
+      "da_min": 0.10794439911842346,
+      "da_median": 0.316348671913147,
+      "da_max": 0.44998782873153687,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6389945784536774,
+      "mean_incidence_degrees": 36.611692477136884,
+      "mean_slant_range_m": 850175.5878904166,
+      "patch": "PATCH_11",
+      "initial_candidate_count": 58693,
+      "geometry_valid_count": 51177,
+      "phase_valid_count": 51177,
+      "range_bounds": [
+        2916,
+        4497
+      ],
+      "azimuth_bounds": [
+        2661,
+        4240
+      ]
+    },
+    {
+      "candidate_count": 19382,
+      "phase_shape": [
+        19382,
+        763
+      ],
+      "bperp_shape": [
+        19382,
+        763
+      ],
+      "da_min": 0.10011966526508331,
+      "da_median": 0.3012167513370514,
+      "da_max": 0.4496513605117798,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6321726307626746,
+      "mean_incidence_degrees": 36.22082366638341,
+      "mean_slant_range_m": 846481.1859882305,
+      "patch": "PATCH_12",
+      "initial_candidate_count": 21006,
+      "geometry_valid_count": 19554,
+      "phase_valid_count": 19382,
+      "range_bounds": [
+        2916,
+        4497
+      ],
+      "azimuth_bounds": [
+        4041,
+        5521
+      ]
+    },
+    {
+      "candidate_count": 38777,
+      "phase_shape": [
+        38777,
+        763
+      ],
+      "bperp_shape": [
+        38777,
+        763
+      ],
+      "da_min": 0.11308036744594574,
+      "da_median": 0.33137720823287964,
+      "da_max": 0.4499870538711548,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6652842565098556,
+      "mean_incidence_degrees": 38.11798007451359,
+      "mean_slant_range_m": 864899.5850198395,
+      "patch": "PATCH_13",
+      "initial_candidate_count": 42295,
+      "geometry_valid_count": 39167,
+      "phase_valid_count": 38777,
+      "range_bounds": [
+        4398,
+        5930
+      ],
+      "azimuth_bounds": [
+        1,
+        1480
+      ]
+    },
+    {
+      "candidate_count": 36044,
+      "phase_shape": [
+        36044,
+        763
+      ],
+      "bperp_shape": [
+        36044,
+        763
+      ],
+      "da_min": 0.10871667414903641,
+      "da_median": 0.34590214490890503,
+      "da_max": 0.4499943256378174,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6628755807337758,
+      "mean_incidence_degrees": 37.97997311832882,
+      "mean_slant_range_m": 863504.8181026335,
+      "patch": "PATCH_14",
+      "initial_candidate_count": 42584,
+      "geometry_valid_count": 36044,
+      "phase_valid_count": 36044,
+      "range_bounds": [
+        4398,
+        5930
+      ],
+      "azimuth_bounds": [
+        1281,
+        2860
+      ]
+    },
+    {
+      "candidate_count": 2476,
+      "phase_shape": [
+        2476,
+        763
+      ],
+      "bperp_shape": [
+        2476,
+        763
+      ],
+      "da_min": 0.16187536716461182,
+      "da_median": 0.3349955677986145,
+      "da_max": 0.44964292645454407,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6557564850804148,
+      "mean_incidence_degrees": 37.57207898344131,
+      "mean_slant_range_m": 859414.6076569621,
+      "patch": "PATCH_15",
+      "initial_candidate_count": 3961,
+      "geometry_valid_count": 2476,
+      "phase_valid_count": 2476,
+      "range_bounds": [
+        4398,
+        5930
+      ],
+      "azimuth_bounds": [
+        2661,
+        4240
+      ]
+    }
+  ],
+  "skipped_patches": []
+}
+	Command being timed: "python run_gamma_sbas_ps_optimized.py"
+	User time (seconds): 517.69
+	System time (seconds): 654.01
+	Percent of CPU this job got: 11%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:49:13
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2384520
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 7787754
+	Minor (reclaiming a frame) page faults: 26949045
+	Voluntary context switches: 7740080
+	Involuntary context switches: 8952
+	Swaps: 0
+	File system inputs: 1435513768
+	File system outputs: 15823592
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

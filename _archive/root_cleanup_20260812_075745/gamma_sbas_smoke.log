@@ -1,0 +1,183 @@
+复用已有雷达坐标经纬度：
+  longitude: /mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon
+  latitude : /mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat
+
+提取振幅离散度PS候选点...
+D_A阈值筛选后候选点：30834
+
+执行纯PS空间均衡优化...
+PS空间优化后候选点：30834
+候选点保留比例：1.0000
+
+Patch布局：
+  range patches  : 1
+  azimuth patches: 552
+  grid patch count: 552
+
+[1/2] 处理PATCH_275
+PATCH_275完成：7568个PS点
+
+[2/2] 处理PATCH_276
+PATCH_276完成：30149个PS点
+
+======================================================
+GAMMA SBAS Stage-1准备完成
+======================================================
+D_A筛选候选点：30834
+空间优化候选点：30834
+有效patch：2
+跳过patch：0
+输出目录：/mnt/vol-gdc28n1r/insar/cangzhou_P69/pystamps_sbas_smoke
+{
+  "input_project": "/mnt/vol-gdc28n1r/insar/cangzhou_P69",
+  "output_dataset": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/pystamps_sbas_smoke",
+  "processor": "gamma",
+  "processing_mode": "pure_ps_spatially_balanced",
+  "small_baseline_flag": "y",
+  "reference_date": "20201026",
+  "acquisition_count": 257,
+  "interferogram_count": 763,
+  "candidate_count_before_patch": 30834,
+  "candidate_count_after_da_threshold": 30834,
+  "candidate_count_after_ps_optimization": 30834,
+  "candidate_retained_fraction": 1.0,
+  "candidate_row_start": 2750,
+  "candidate_row_stop": 2758,
+  "candidate_configuration": {
+    "max_invalid_interferograms": 1,
+    "minimum_patch_candidates": 50
+  },
+  "ps_optimization": {
+    "configuration": {
+      "enabled": false,
+      "cell_rows": 32,
+      "cell_cols": 32,
+      "max_candidates_per_cell": 32,
+      "global_max_candidates": null,
+      "target_candidates_per_patch": 2000,
+      "min_range_patches": 1,
+      "min_azimuth_patches": 1,
+      "max_range_patches": 40,
+      "max_azimuth_patches": 600
+    },
+    "original_count": 30834,
+    "valid_count": 30834,
+    "selected_count": 30834,
+    "retained_fraction_of_valid": 1.0,
+    "da_min": 0.07875517010688782,
+    "da_median": 0.4134766310453415,
+    "da_max": 0.5999876260757446,
+    "row_min": 2750,
+    "row_max": 2757,
+    "col_min": 0,
+    "col_max": 4586
+  },
+  "auto_patch_layout": false,
+  "patch_layout": {
+    "mode": "manual",
+    "selected_candidate_count": 30834,
+    "range_patches": 1,
+    "azimuth_patches": 552,
+    "actual_grid_patch_count": 552,
+    "estimated_candidates_per_patch": 55.858695652173914,
+    "range_overlap": 8,
+    "azimuth_overlap": 2
+  },
+  "patch_definition_count": 2,
+  "patch_count": 2,
+  "skipped_patch_count": 0,
+  "width": 5930,
+  "length": 5521,
+  "rslc_width": 23722,
+  "rslc_length": 5521,
+  "range_looks": 4,
+  "azimuth_looks": 1,
+  "wavelength_m": 0.055465759531382094,
+  "heading_degrees": -13.3403919,
+  "radar_lonlat": {
+    "longitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon",
+    "latitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat",
+    "map_longitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/dem_seg.lon",
+    "map_latitude_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/dem_seg.lat",
+    "dem_parameter_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.dem_par",
+    "dem_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.dem",
+    "lookup_table_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/N38E117.20210211.lt_fine",
+    "radar_parameter_file": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.vv.mli.par",
+    "map_width": 7667,
+    "map_length": 6675,
+    "radar_width": 5930,
+    "radar_length": 5521,
+    "generated_map_coordinates": false,
+    "generated_radar_coordinates": false
+  },
+  "geometry_files": {
+    "longitude": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lon",
+    "latitude": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211_4_1.rdc.lat",
+    "height": "/mnt/vol-gdc28n1r/insar/cangzhou_P69/DEM_prep/20210211.hgt"
+  },
+  "patches": [
+    {
+      "candidate_count": 7568,
+      "phase_shape": [
+        7568,
+        763
+      ],
+      "bperp_shape": [
+        7568,
+        763
+      ],
+      "da_min": 0.10820212215185165,
+      "da_median": 0.41329705715179443,
+      "da_max": 0.5999395847320557,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.6109969845167014,
+      "mean_incidence_degrees": 35.00754850802709,
+      "mean_slant_range_m": 835819.1210440935,
+      "patch": "PATCH_275",
+      "initial_candidate_count": 7724,
+      "geometry_valid_count": 7568,
+      "phase_valid_count": 7568,
+      "range_bounds": [
+        1,
+        5930
+      ],
+      "azimuth_bounds": [
+        2739,
+        2752
+      ]
+    },
+    {
+      "candidate_count": 30149,
+      "phase_shape": [
+        30149,
+        763
+      ],
+      "bperp_shape": [
+        30149,
+        763
+      ],
+      "da_min": 0.07875517010688782,
+      "da_median": 0.41332992911338806,
+      "da_max": 0.5999876260757446,
+      "phase_valid_fraction_min": 1.0,
+      "phase_valid_fraction_median": 1.0,
+      "mean_incidence_radians": 0.610746999582093,
+      "mean_incidence_degrees": 34.99322542633218,
+      "mean_slant_range_m": 835689.7687880553,
+      "patch": "PATCH_276",
+      "initial_candidate_count": 30834,
+      "geometry_valid_count": 30149,
+      "phase_valid_count": 30149,
+      "range_bounds": [
+        1,
+        5930
+      ],
+      "azimuth_bounds": [
+        2749,
+        2762
+      ]
+    }
+  ],
+  "skipped_patches": []
+}

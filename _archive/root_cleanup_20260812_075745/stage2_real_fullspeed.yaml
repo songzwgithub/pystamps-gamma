@@ -1,0 +1,25 @@
+runtime:
+  # 同时处理3个空间patch。
+  cpu_workers: 3
+
+  # 文件读取、MAT文件写入等。
+  io_workers: 4
+
+  # 多patch时自动使用进程池。
+  backend: auto
+
+  # topofit等已有原生内核优先自动使用。
+  stage2_kernel_backend: auto
+
+  # 每个patch内部最多使用10个CPU线程。
+  # 设置为正数也会允许patch级并行，而不是逐patch顺序执行。
+  stage2_native_threads: 10
+
+  # 只保存最终pm1.mat，避免每次迭代写数GB检查点。
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1
+
+  # 正式计算关闭高频debug JSON写入。
+  stage2_debug: false
+
+  enable_mat_stage_cache: true
