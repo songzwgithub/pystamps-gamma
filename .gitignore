@@ -1,0 +1,45 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Native binary artifacts
+*.so
+*.dylib
+*.dll
+*.pyd
+
+# Rust build
+/target/
+
+# Python build
+/build/
+/dist/
+*.egg-info/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local development/archive
+/_archive/
+/bin/
+
+# Temporary and historical patch files
+*.bak
+*.old
+*.tmp
+*.swp
+*broken*
+*before_*
+
+# OS/editor
+.DS_Store
+Thumbs.db

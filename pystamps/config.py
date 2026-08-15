@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+_RUNTIME_BACKEND_ALIASES = {
+    "auto": "auto",
+    "threads": "threads",
+    "thread": "threads",
+    "io": "threads",
+    "processes": "processes",
+    "process": "processes",
+    "cpu": "processes",
+    "gpu": "gpu",
+    "native": "native",
+}
+
+_KERNEL_BACKEND_ALIASES = {
+    "auto": "auto",
+    "python": "python",
+    "cpu": "python",
+    "native": "native",
+    "gpu": "cuda",
+    "cuda": "cuda",
+}
+
+
+@dataclass(slots=True)
+class RuntimeConfig:
+    io_workers: int = 8
+    cpu_workers: int = 0
+    backend: str = "auto"
+    stage2_kernel_backend: str = "auto"
+    stage2_patch_backend_overrides: dict[str, str] = field(default_factory=dict)
+    kernel_backend_overrides: dict[str, str] = field(default_factory=dict)
+    stage2_native_threads: int = 0
+    stage7_chunk_ps: int = 100_000
+    stage8_chunk_edges: int = 200_000
+    enable_mat_stage_cache: bool = True
+    stage2_checkpoint_mode: str = "final"
+    stage2_checkpoint_interval: int = 1
+    stage2_debug: bool = False
+    stage4_debug: bool = False
+
+
+@dataclass(slots=True)
+class ToleranceConfig:
+    rtol: float = 1e-5
+    atol: float = 1e-7
+    wrap_equivalence: bool = True
+    wrap_period: float = 2.0 * 3.141592653589793
+    wrap_keys: tuple[str, ...] = ("ph_uw", "ph", "dph_noise", "dph_space_uw")
+
+
+@dataclass(slots=True)
+class IFGSelectionConfig:
+    # auto: robust project-relative quality selection
+    # manual: use drop_ifg_index below
+    # none: keep every IFG
+    mode: str = "auto"
+
+    robust_z_threshold: float = 4.0
+    contextual_z_threshold: float = 3.5
+    tail_quantile: float = 0.99
+    min_bad_metrics: int = 2
+    max_drop_fraction: float = 0.05
+    preserve_network: bool = True
+    temporal_bins: int = 8
+
+
+    # Stage6 GRID-based multi-metric QC.
+    grid_qc_enabled: bool = True
+    grid_qc_metric_bad_quantile: float = 0.90
+    grid_qc_score_tail_fraction: float = 0.02
+    grid_qc_score_z_threshold: float = 1.5
+    grid_qc_extreme_z_threshold: float = 3.5
+    grid_qc_min_bad_metrics: int = 2
+    grid_qc_max_drop_fraction: float = 0.05
+    grid_qc_preserve_network: bool = True
+
+    # Deterministic QC subsampling only; scientific Stage6 arrays
+    # themselves are never subsampled.
+    grid_qc_sample_ps: int = 20000
+    grid_qc_sample_pairs: int = 30000
+    grid_qc_closure_sample_ps: int = 6000
+    grid_qc_max_triangles: int = 4000
+
+    # GRID-QC V3 graph/node attribution.
+    grid_qc_node_context_enabled: bool = True
+    grid_qc_node_min_degree: int = 3
+    grid_qc_node_candidate_fraction: float = 0.50
+    grid_qc_edge_excess_z_threshold: float = 2.5
+    grid_qc_clustered_edge_excess_z_threshold: float = 3.5
+    grid_qc_low_degree_score_z_threshold: float = 4.0
+
+    # FINAL IFG-QC.
+    # Default False preserves backward compatibility;
+    # production.yaml explicitly enables it.
+    final_ifg_qc_enabled: bool = False
+
+    final_qc_msd_strong_percentile: float = 0.975
+    final_qc_msd_extreme_percentile: float = 0.990
+
+    final_qc_network_strong_percentile: float = 0.975
+    final_qc_network_extreme_percentile: float = 0.990
+
+    final_qc_max_drop_fraction: float = 0.05
+    final_qc_preserve_network: bool = True
+    final_qc_fail_on_cap: bool = True
+
+    final_qc_chunk_ifg: int = 8
+
+    drop_ifg_index: tuple[int, ...] = ()
+
+
+@dataclass(slots=True)
+class ExternalToolsConfig:
+    triangle: str = "triangle"
+    snaphu: str = "snaphu"
+
+
+
+@dataclass(slots=True)
+class ReferenceConfig:
+    mode: str = "auto"
+    longitude: float | None = None
+    latitude: float | None = None
+    radius_m: float = 500.0
+    cell_size_m: float = 1000.0
+    min_points: int = 20
+    coherence_weight: float = 0.60
+    error_proxy_weight: float = 0.25
+    density_weight: float = 0.15
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in {"auto", "existing"}:
+            raise ConfigError("reference.mode must be 'auto' or 'existing'")
+        if (self.longitude is None) != (self.latitude is None):
+            raise ConfigError(
+                "reference.longitude and reference.latitude must both be set or both be null"
+            )
+        if self.longitude is not None:
+            if not -180 <= float(self.longitude) <= 180:
+                raise ConfigError("reference.longitude outside [-180, 180]")
+            if not -90 <= float(self.latitude) <= 90:
+                raise ConfigError("reference.latitude outside [-90, 90]")
+        if self.radius_m <= 0 or self.cell_size_m <= 0 or self.min_points <= 0:
+            raise ConfigError("reference radius/cell/min_points must be positive")
+        weights = (self.coherence_weight, self.error_proxy_weight, self.density_weight)
+        if any(v < 0 for v in weights) or sum(weights) <= 0:
+            raise ConfigError("reference score weights are invalid")
+
+
+@dataclass(slots=True)
+class CompatibilityConfig:
+    reference_root: str | None = None
+    strict_reference: bool = False
+
+
+@dataclass(slots=True)
+class RunConfig:
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    tolerance: ToleranceConfig = field(default_factory=ToleranceConfig)
+    ifg_selection: IFGSelectionConfig = field(default_factory=IFGSelectionConfig)
+    tools: ExternalToolsConfig = field(default_factory=ExternalToolsConfig)
+    reference: ReferenceConfig = field(default_factory=ReferenceConfig)
+    compat: CompatibilityConfig = field(default_factory=CompatibilityConfig)
+
+
+class ConfigError(ValueError):
+    """Raised when configuration is malformed."""
+
+
+def _normalize_backend_override_map(
+    payload: Any,
+    *,
+    field_name: str,
+    normalizer: Any,
+) -> dict[str, str]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ConfigError(f"'{field_name}' must be an object")
+    return {
+        str(key): normalizer(str(value))
+        for key, value in payload.items()
+    }
+
+
+def normalize_runtime_backend(name: str) -> str:
+    normalized = _RUNTIME_BACKEND_ALIASES.get((name or "auto").strip().lower())
+    if normalized is None:
+        raise ConfigError(
+            f"Unsupported runtime backend '{name}'. Use: auto, threads, processes, gpu, or native"
+        )
+    return normalized
+
+
+def normalize_kernel_backend(name: str) -> str:
+    normalized = _KERNEL_BACKEND_ALIASES.get((name or "auto").strip().lower())
+    if normalized is None:
+        raise ConfigError(
+            f"Unsupported kernel backend '{name}'. Use: auto, python, native, or cuda"
+        )
+    return normalized
+
+
+def normalize_stage2_kernel_backend(name: str) -> str:
+    normalized = normalize_kernel_backend(name)
+    if normalized == "cuda":
+        raise ConfigError(
+            f"Unsupported stage-2 kernel backend '{name}'. Use: auto, python, or native"
+        )
+    return normalized
+
+
+def _load_raw(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ConfigError(f"Config file does not exist: {path}")
+
+    suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
+    if suffix in {".yaml", ".yml"}:
+        payload = yaml.safe_load(text) or {}
+    elif suffix == ".json":
+        payload = json.loads(text)
+    else:
+        raise ConfigError("Config must be YAML or JSON")
+
+    if not isinstance(payload, dict):
+        raise ConfigError("Top-level config payload must be an object")
+    return payload
+
+
+def _as_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key, {})
+    if not isinstance(value, dict):
+        raise ConfigError(f"'{key}' must be an object")
+    return value
+
+
+def load_config(path: str | Path | None = None) -> RunConfig:
+    if path is None:
+        return RunConfig()
+
+    raw = _load_raw(Path(path))
+    runtime_payload = _as_dict(raw, "runtime")
+    runtime_norm = dict(runtime_payload)
+    if "backend" in runtime_norm:
+        runtime_norm["backend"] = normalize_runtime_backend(str(runtime_norm["backend"]))
+    if "stage2_kernel_backend" in runtime_norm:
+        runtime_norm["stage2_kernel_backend"] = normalize_stage2_kernel_backend(
+            str(runtime_norm["stage2_kernel_backend"])
+        )
+    if "stage2_patch_backend_overrides" in runtime_norm:
+        runtime_norm["stage2_patch_backend_overrides"] = _normalize_backend_override_map(
+            runtime_norm.get("stage2_patch_backend_overrides"),
+            field_name="runtime.stage2_patch_backend_overrides",
+            normalizer=normalize_stage2_kernel_backend,
+        )
+    if "kernel_backend_overrides" in runtime_norm:
+        runtime_norm["kernel_backend_overrides"] = _normalize_backend_override_map(
+            runtime_norm.get("kernel_backend_overrides"),
+            field_name="runtime.kernel_backend_overrides",
+            normalizer=normalize_kernel_backend,
+        )
+
+    runtime = RuntimeConfig(**runtime_norm)
+    tol_payload = _as_dict(raw, "tolerance")
+    wrap_keys = tol_payload.get("wrap_keys")
+    if isinstance(wrap_keys, list):
+        tol_payload = {**tol_payload, "wrap_keys": tuple(str(v) for v in wrap_keys)}
+    tolerance = ToleranceConfig(**tol_payload)
+    ifg_selection_payload = _as_dict(
+        raw,
+        "ifg_selection",
+    )
+    if (
+        "drop_ifg_index"
+        in ifg_selection_payload
+        and isinstance(
+            ifg_selection_payload[
+                "drop_ifg_index"
+            ],
+            list,
+        )
+    ):
+        ifg_selection_payload = {
+            **ifg_selection_payload,
+            "drop_ifg_index": tuple(
+                int(v)
+                for v
+                in ifg_selection_payload[
+                    "drop_ifg_index"
+                ]
+            ),
+        }
+
+    ifg_selection = IFGSelectionConfig(
+        **ifg_selection_payload
+    )
+
+    tools = ExternalToolsConfig(**_as_dict(raw, "tools"))
+    reference = ReferenceConfig(**_as_dict(raw, "reference"))
+    compat = CompatibilityConfig(**_as_dict(raw, "compat"))
+    return RunConfig(ifg_selection=ifg_selection, 
+        runtime=runtime,
+        tolerance=tolerance,
+        tools=tools,
+        reference=reference,
+        compat=compat,
+    )

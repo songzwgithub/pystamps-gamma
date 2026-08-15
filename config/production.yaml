@@ -1,0 +1,163 @@
+# ============================================================
+# Project paths
+#
+# work_dir:
+#   null -> directory where the pystamps command is executed
+#
+# data_dir:
+#   null -> parent directory of work_dir
+#
+# Component paths:
+#   null -> automatic discovery below data_dir
+#
+# Supported automatic directory names:
+#   RSLC : RSLC_cropped / RSLC
+#   DIFF : DIFF / DIFF_dir
+#   MLI  : MLI_dir / MLI
+#   DEM  : DEM_prep / DEM
+# ============================================================
+paths:
+  work_dir: null
+  data_dir: null
+
+  rslc_dir: null
+  diff_dir: null
+  mli_dir: null
+  dem_dir: null
+
+  rslc_tab: null
+  itab: null
+
+
+# pySTAMPS-GAMMA production configuration
+
+runtime:
+  backend: auto
+  io_workers: 8
+  cpu_workers: 0
+  stage2_kernel_backend: native
+  stage2_native_threads: 0
+  stage2_checkpoint_mode: final
+  stage2_checkpoint_interval: 1
+  stage2_debug: false
+  stage4_debug: false
+  enable_mat_stage_cache: true
+
+ifg_selection:
+  # Automatic project-relative IFG QC.
+  # No project-specific IFG numbers are hard-coded.
+  mode: auto
+
+  # Global robust high-side anomaly:
+  # z = (x - median) / (1.4826 * MAD)
+  robust_z_threshold: 4.0
+
+  # Compare against IFGs with similar temporal baseline and
+  # against IFGs sharing acquisition endpoints.
+  contextual_z_threshold: 3.5
+
+  # Only the extreme high-noise tail contributes this evidence.
+  tail_quantile: 0.99
+
+  # V2: at least this many independent evidence families must agree.
+  min_bad_metrics: 2
+
+  # Safety guard: never automatically reject more than 5%.
+  max_drop_fraction: 0.05
+
+  # Never remove an IFG if doing so disconnects the SBAS graph.
+  preserve_network: true
+
+  # Number of temporal-baseline groups used for local comparison.
+  temporal_bins: 8
+
+  # Used only when mode: manual.
+  drop_ifg_index: []
+
+  # Stage6 GRID multi-metric automatic IFG quality control.
+  grid_qc_enabled: true
+
+  # A metric is considered locally poor when it is in the
+  # worst 10% of the current project.
+  grid_qc_metric_bad_quantile: 0.90
+
+  # Composite-score tail inspected as candidate IFGs.
+  grid_qc_score_tail_fraction: 0.02
+
+  # Candidate needs a significant project-relative composite anomaly.
+  grid_qc_score_z_threshold: 2.5
+
+  # A single severe GRID/closure anomaly may independently nominate an IFG.
+  grid_qc_extreme_z_threshold: 4.5
+
+  grid_qc_min_bad_metrics: 2
+
+  # Safety cap only; normal runs should be far below this.
+  grid_qc_max_drop_fraction: 0.05
+
+  # Never disconnect the SBAS acquisition network.
+  grid_qc_preserve_network: true
+
+  # QC-only deterministic samples.
+  grid_qc_sample_ps: 20000
+  grid_qc_sample_pairs: 30000
+  grid_qc_closure_sample_ps: 6000
+  grid_qc_max_triangles: 4000
+
+  # GRID-QC V3: distinguish acquisition-node effects from true bad edges.
+  grid_qc_node_context_enabled: true
+
+  # Need at least this many incident edges before treating a node
+  # median/fraction as statistically meaningful.
+  grid_qc_node_min_degree: 3
+
+  # If >=50% of the edges touching one acquisition are already
+  # V2 candidates, treat that acquisition as a clustered bad node.
+  grid_qc_node_candidate_fraction: 0.50
+
+  # Normal edge must be anomalous relative to endpoint-node baselines.
+  grid_qc_edge_excess_z_threshold: 2.5
+
+  # Edges touching a clustered acquisition require stronger evidence.
+  grid_qc_clustered_edge_excess_z_threshold: 3.5
+
+  # Sparse nodes cannot provide reliable node attribution.
+  # Allow only very strong global anomalies through.
+  grid_qc_low_degree_score_z_threshold: 4.0
+
+
+
+  # FINAL IFG-QC: GRID is preflag only; all IFGs are unwrapped first.
+  final_ifg_qc_enabled: true
+  final_qc_msd_strong_percentile: 0.975
+  final_qc_msd_extreme_percentile: 0.990
+  final_qc_network_strong_percentile: 0.975
+  final_qc_network_extreme_percentile: 0.990
+  final_qc_max_drop_fraction: 0.05
+  final_qc_preserve_network: true
+  final_qc_fail_on_cap: true
+  final_qc_chunk_ifg: 8
+reference:
+  # Priority:
+  # 1. longitude + latitude set -> explicit reference.
+  # 2. both null and mode=auto -> automatic Stage-5 quality region.
+  # 3. frozen historical dataset -> mode=existing.
+  mode: auto
+  longitude: null
+  latitude: null
+  radius_m: 500.0
+
+  cell_size_m: 1000.0
+  min_points: 20
+
+  coherence_weight: 0.60
+  error_proxy_weight: 0.25
+  density_weight: 0.15
+
+tools:
+  triangle: triangle
+  snaphu: snaphu
+
+compat:
+  reference_root: null
+  strict_reference: false
