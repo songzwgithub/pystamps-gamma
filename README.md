@@ -10,7 +10,11 @@ pystamps -g
 pystamps run --start-step 1 --end-step 8
 ```
 
+<!-- STAGE1_AUTO_PREP_README_V1 -->
+
 For normal production use, an explicit repository-level `--config` path and an explicit `--dataset` path are not required.
+
+When Stage 1 is requested, pySTAMPS-GAMMA checks for a complete Stage-1 `PATCH_*` dataset. If Stage 1 is missing or incomplete, GAMMA inputs are discovered automatically from `data_dir` (by default `work_dir.parent`), Stage-1 preparation is executed automatically, the generated patches are re-discovered, and processing continues through the requested stages. Existing complete Stage-1 products are reused and are not regenerated.
 
 ---
 
@@ -129,6 +133,8 @@ python -m pip install --upgrade pip
 python -m pip install .
 ```
 
+For normal installation, do not use `--no-deps`; dependency resolution must retain the project constraints, including `numpy>=2.2,<2.4`.
+
 Verify:
 
 ```bash
@@ -168,6 +174,15 @@ Run:
 cd PROJECT/pystamps
 pystamps -g
 pystamps run --start-step 1 --end-step 8
+```
+
+For a fresh project, no separate Stage-1 preparation command is required. `pystamps run --start-step 1 ...` automatically prepares Stage 1 when `PATCH_*` products are absent or incomplete.
+
+Automatic path convention:
+
+```text
+work_dir = current pystamps directory
+data_dir = work_dir.parent
 ```
 
 ---
@@ -449,6 +464,8 @@ scripts/corrections/prepare_gacos.py
 scripts/postprocess/postprocess.py
 scripts/validate_audit.py
 ```
+
+`scripts/pipeline/prepare_gamma_sbas.py` remains available as an advanced/manual Stage-1 preparation interface. When run from a project `pystamps/` directory, its defaults are `output/work_dir = cwd`, `project/data_dir = cwd.parent`, and a local `pystamps.yaml` is used when present.
 
 The main installed interface is:
 

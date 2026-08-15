@@ -13,7 +13,10 @@ from pystamps.input_contracts import describe_stage_inputs, parse_stage_spec
 from pystamps.kernels import describe_backend_matrix
 from pystamps.notebooks.dataset_inspection import inspect_stage1_inputs
 from pystamps.native import native_binary_command
-from pystamps.pipeline.stages import run_pipeline
+from pystamps.pipeline.stages import (
+    ensure_stage1_dataset,
+    run_pipeline,
+)
 from pystamps.pipeline.types import PipelineContext
 from pystamps.project_paths import (
     ProjectPathError,
@@ -412,6 +415,17 @@ def _cmd_run(args: argparse.Namespace, run_config: RunConfig) -> int:
             "or gpu."
         )
 
+    # === STAGE1_AUTO_PREP_CLI_V1 ===
+    context = PipelineContext(
+        dataset_root=Path(args.dataset).resolve(),
+        run_config=run_config,
+        start_step=args.start_step,
+        end_step=args.end_step,
+        dry_run=args.dry_run,
+    )
+
+    ensure_stage1_dataset(context)
+
     if backend == "native":
         payload = _run_native_pipeline(
             args,
@@ -431,14 +445,6 @@ def _cmd_run(args: argparse.Namespace, run_config: RunConfig) -> int:
             )
             else 0
         )
-
-    context = PipelineContext(
-        dataset_root=Path(args.dataset).resolve(),
-        run_config=run_config,
-        start_step=args.start_step,
-        end_step=args.end_step,
-        dry_run=args.dry_run,
-    )
 
     report = run_pipeline(context)
     payload = [

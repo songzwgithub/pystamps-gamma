@@ -201,6 +201,11 @@ def _auto_find_geometry_file(
 
         name = path.name.lower()
 
+        # === STAGE1_PIXEL_AREA_HEIGHT_GUARD_V1 ===
+        # pixel_area.hgt is not radar-coordinate elevation.
+        if "pixel_area" in name:
+            continue
+
         if not any(
             token.lower() in name
             for token in name_tokens

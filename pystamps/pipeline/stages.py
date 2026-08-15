@@ -68,6 +68,128 @@ MERGED_STAGE_BUNDLES: dict[int, list[str]] = {
 }
 
 
+# === STAGE1_AUTO_PREP_V1 ===
+
+_STAGE1_ROOT_REQUIRED = (
+    "processor.txt",
+    "width.txt",
+    "len.txt",
+    "small_baselines.list",
+    "parms.mat",
+)
+
+
+def _stage1_dataset_complete(dataset: DatasetLayout) -> bool:
+    if not dataset.patches:
+        return False
+
+    if not all((dataset.root / name).is_file() for name in _STAGE1_ROOT_REQUIRED):
+        return False
+
+    required = PATCH_STAGE_BUNDLES[1]
+    return all(
+        all((patch / name).is_file() for name in required)
+        for patch in dataset.patches
+    )
+
+
+def ensure_stage1_dataset(context: PipelineContext) -> DatasetLayout:
+    dataset = discover_dataset(context.dataset_root)
+
+    if context.start_step > 1:
+        return dataset
+
+    if _stage1_dataset_complete(dataset):
+        print("[STAGE1] Existing Stage-1 dataset is complete; reuse.", flush=True)
+        return dataset
+
+    print()
+    print("============================================================", flush=True)
+    print("pySTAMPS STAGE-1 AUTO PREPARATION", flush=True)
+    print("============================================================", flush=True)
+    print("[STAGE1] Stage-1 dataset is missing or incomplete.", flush=True)
+
+    if context.dry_run:
+        print("[STAGE1] dry-run: GAMMA Stage-1 preparation would run automatically.", flush=True)
+        print("============================================================", flush=True)
+        print()
+        return dataset
+
+    from pystamps.prep.gamma_candidates import CandidateConfig
+    from pystamps.prep.gamma_stage1 import GammaStage1Config, prepare_gamma_sbas_stage1
+
+    data_dir = Path(
+        os.environ.get("PYSTAMPS_DATA_DIR", str(context.dataset_root.parent))
+    ).expanduser().resolve()
+
+    dem_raw = os.environ.get("PYSTAMPS_DEM_DIR")
+    dem_directory = Path(dem_raw).expanduser().resolve() if dem_raw else None
+
+    print(f"[STAGE1] work_dir : {context.dataset_root}", flush=True)
+    print(f"[STAGE1] data_dir : {data_dir}", flush=True)
+    if dem_directory is not None:
+        print(f"[STAGE1] DEM      : {dem_directory}", flush=True)
+    print("[STAGE1] Preparing Stage 1 from GAMMA inputs automatically...", flush=True)
+    print()
+
+    ref = context.run_config.reference
+    cfg = GammaStage1Config(
+        candidate=CandidateConfig(
+            da_threshold=0.60,
+            min_valid_fraction=0.90,
+            block_rows=2048,
+            mli_is_power=True,
+            normalize_per_image=False,
+        ),
+        candidate_source="rslc_sbas",
+        reference_lon=ref.longitude,
+        reference_lat=ref.latitude,
+        reference_radius_m=(
+            ref.radius_m
+            if ref.longitude is not None and ref.latitude is not None
+            else None
+        ),
+        dem_directory=dem_directory,
+        range_looks=None,
+        azimuth_looks=None,
+        sbas_deramp_mode="none",
+        force=False,
+    )
+
+    old_resume = os.environ.get("PYSTAMPS_STAGE1_RESUME")
+    os.environ["PYSTAMPS_STAGE1_RESUME"] = "1"
+
+    try:
+        prepare_gamma_sbas_stage1(
+            data_dir,
+            context.dataset_root,
+            config=cfg,
+        )
+    except Exception as exc:
+        raise StageExecutionError(
+            f"Automatic GAMMA Stage-1 preparation failed: {exc}"
+        ) from exc
+    finally:
+        if old_resume is None:
+            os.environ.pop("PYSTAMPS_STAGE1_RESUME", None)
+        else:
+            os.environ["PYSTAMPS_STAGE1_RESUME"] = old_resume
+
+    dataset = discover_dataset(context.dataset_root)
+
+    if not _stage1_dataset_complete(dataset):
+        raise StageExecutionError(
+            "Automatic GAMMA Stage-1 preparation returned successfully, "
+            "but the resulting Stage-1 dataset is incomplete."
+        )
+
+    print("[STAGE1] Automatic Stage-1 preparation completed.", flush=True)
+    print(f"[STAGE1] patch count: {len(dataset.patches)}", flush=True)
+    print("============================================================", flush=True)
+    print()
+    return dataset
+
+
 def _stage_phase_marker_path(
     dataset_root: Path,
     stage_id: int,
@@ -683,7 +805,7 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
     # this invocation.
     context.stage78_phase_file = None
 
-    dataset: DatasetLayout = discover_dataset(context.dataset_root)
+    dataset: DatasetLayout = ensure_stage1_dataset(context)
     report = PipelineReport()
     patch_count = len(dataset.patches)
     merged_stage5 = StageDef(5, "Merge patches", "merged")
