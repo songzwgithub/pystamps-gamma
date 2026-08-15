@@ -16,6 +16,8 @@ For normal production use, an explicit repository-level `--config` path and an e
 
 When Stage 1 is requested, pySTAMPS-GAMMA checks for a complete Stage-1 `PATCH_*` dataset. If Stage 1 is missing or incomplete, GAMMA inputs are discovered automatically from `data_dir` (by default `work_dir.parent`), Stage-1 preparation is executed automatically, the generated patches are re-discovered, and processing continues through the requested stages. Existing complete Stage-1 products are reused and are not regenerated.
 
+When Stage 8 completes successfully, the production workflow automatically continues into the engineering postprocess. The same command therefore produces corrected displacement time series, formal full-period velocity, annual velocity where temporally supported, quality metrics, figures, GIS point products, and non-interpolated GeoTIFF products under `outputs/`.
+
 ---
 
 ## 1. Requirements
@@ -35,7 +37,7 @@ conda create -n pystamps python=3.12 -y
 conda activate pystamps
 ```
 
-The normal package installation installs the required Python dependencies, including `rasterio` and `pyproj` used by the GACOS workflow.
+The normal package installation installs the required Python dependencies, including `rasterio`, `pyproj`, `matplotlib`, and `pyshp` used by the engineering export workflow.
 
 ### GAMMA
 
@@ -148,6 +150,7 @@ Native extension:
 python - <<'PY'
 import pystamps
 import pystamps.kernels._stage2_native as native
+
 print("pySTAMPS:", pystamps.__version__)
 print("native:", native.__file__)
 PY
@@ -263,6 +266,26 @@ gacos:
   enabled: false
   gacos_dir: null
 
+postprocess:
+  enabled: true
+  output_dir: outputs
+
+  chunk_ps: 16384
+  annual_min_obs: 6
+  annual_min_span_days: 180.0
+
+  figures: true
+  shapefile: true
+  timeseries_shapefile: true
+
+  geotiff: true
+  grid_resolution_m: 100.0
+
+  vertical_enabled: false
+  vertical_incidence_source: auto
+  vertical_incidence_deg: null
+  vertical_positive: up
+
 tools:
   triangle: triangle
   snaphu: snaphu
@@ -288,6 +311,8 @@ Completed products may be reported as:
 ```text
 status: skipped_existing
 ```
+
+When `postprocess.enabled: true`, requesting Stage 8 also triggers the automatic engineering postprocess after Stage 8 is successfully completed or reused.
 
 ---
 
@@ -455,7 +480,203 @@ GACOS performance remains project-dependent and should be evaluated from the QA 
 
 ---
 
-## 12. Source-checkout utilities
+<!-- ENGINEERING_POSTPROCESS_README_V1 -->
+
+## 12. Automatic engineering postprocess
+
+Stage 8 is the final numerical StaMPS stage. With the production configuration, successful Stage 8 processing automatically continues into the engineering postprocess.
+
+The normal production command remains:
+
+```bash
+cd PROJECT/pystamps
+pystamps -g
+pystamps run --start-step 1 --end-step 8
+```
+
+The effective production chain is:
+
+```text
+GAMMA inputs
+    ↓
+Stage 1  automatic GAMMA preparation
+    ↓
+Stage 2–5  PS selection / weed / merge
+    ↓
+Stage 6  SBAS unwrapping + final IFG-QC
+    ↓
+Stage 7  SCLA
+    ↓
+Stage 8  spatial/temporal correction
+    ↓
+automatic engineering postprocess
+    ↓
+time series + velocity + annual velocity
+    ↓
+figures + SHP/GeoJSON + GeoTIFF
+```
+
+The postprocess uses the same phase product that generated Stage 8:
+
+```text
+GACOS disabled → phuw2.mat
+GACOS enabled  → phuw2_gacos.mat
+```
+
+### Engineering output structure
+
+By default, products are written under:
+
+```text
+pystamps/
+└── outputs/
+    ├── data/
+    ├── figures/
+    ├── gis/
+    ├── rasters/
+    └── engineering_manifest.json
+```
+
+Scientific data products include:
+
+```text
+outputs/data/corrected_timeseries.h5
+outputs/data/velocity_full.npz
+outputs/data/annual_velocity.npz
+outputs/data/velocity_full.csv
+outputs/data/annual_velocity.csv
+outputs/data/dates.csv
+outputs/data/postprocess_debug.json
+```
+
+`corrected_timeseries.h5` contains the final corrected PS displacement time series.
+
+`velocity_full` is the formal full-period GLS velocity product.
+
+Annual velocity is generated only for years that satisfy the configured minimum number of observations and minimum temporal span.
+
+Typical figures include:
+
+```text
+outputs/figures/velocity_map.png
+outputs/figures/cumulative_last_map.png
+outputs/figures/residual_rms_map.png
+outputs/figures/annual_velocity_YYYY.png
+outputs/figures/velocity_histogram.png
+outputs/figures/timeseries_summary.png
+```
+
+GIS point products include:
+
+```text
+outputs/gis/insar_velocity.shp
+outputs/gis/insar_timeseries.shp
+outputs/gis/insar_velocity.geojson
+```
+
+The time-series Shapefile contains one point per retained PS and date-indexed displacement attributes so it can be opened directly in ArcGIS, QGIS, MapGIS or other GIS software.
+
+Default raster products include:
+
+```text
+outputs/rasters/velocity_mm_yr.tif
+outputs/rasters/cumulative_last_mm.tif
+outputs/rasters/residual_rms_mm.tif
+```
+
+The default GeoTIFF generation is **not spatial interpolation**. PS values are projected to the local UTM CRS and aggregated by arithmetic mean inside the configured grid cells. This avoids silently inventing deformation values between observations.
+
+### Postprocess configuration
+
+```yaml
+postprocess:
+  enabled: true
+  output_dir: outputs
+
+  chunk_ps: 16384
+
+  annual_min_obs: 6
+  annual_min_span_days: 180.0
+
+  figures: true
+  shapefile: true
+  timeseries_shapefile: true
+
+  geotiff: true
+  grid_resolution_m: 100.0
+
+  vertical_enabled: false
+  vertical_incidence_source: auto
+  vertical_incidence_deg: null
+  vertical_positive: up
+```
+
+Set `postprocess.enabled: false` only when the numerical Stage-8 products are desired without automatic engineering export.
+
+### Optional LOS-to-vertical approximation
+
+Single-geometry InSAR measures LOS displacement. A vertical approximation is therefore disabled by default.
+
+For a subsidence-oriented project:
+
+```yaml
+postprocess:
+  vertical_enabled: true
+  vertical_incidence_source: auto
+  vertical_incidence_deg: null
+  vertical_positive: down
+```
+
+The conversion assumes horizontal deformation is negligible:
+
+```text
+vertical_up = LOS / cos(incidence_angle)
+```
+
+`vertical_incidence_source` supports:
+
+```text
+auto      use per-PS incidence angle from merged la2.mat when available;
+          otherwise use vertical_incidence_deg if supplied
+
+la2       require the per-PS incidence angle in la2.mat
+
+constant  use vertical_incidence_deg for all PS
+```
+
+Sign convention:
+
+```text
+vertical_positive: up
+    uplift positive, subsidence negative
+
+vertical_positive: down
+    subsidence positive, uplift negative
+```
+
+When enabled, LOS products are retained and separate vertical products are added:
+
+```text
+outputs/data/vertical_velocity.csv
+outputs/data/vertical_velocity.npz
+outputs/data/vertical_timeseries.h5
+
+outputs/figures/vertical_velocity_map.png
+outputs/figures/vertical_cumulative_last_map.png
+outputs/figures/vertical_velocity_YYYY.png
+
+outputs/gis/insar_vertical_velocity.shp
+outputs/gis/insar_vertical_timeseries.shp
+
+outputs/rasters/vertical_velocity_mm_yr.tif
+outputs/rasters/vertical_cumulative_last_mm.tif
+```
+
+A one-LOS vertical approximation is a modeling assumption, not a full 3-D decomposition. For areas with significant horizontal motion, ascending/descending or other independent observations should be used instead.
+
+---
+
+## 13. Source-checkout utilities
 
 ```text
 scripts/pipeline/prepare_gamma_sbas.py
@@ -475,7 +696,7 @@ pystamps
 
 ---
 
-## 13. Build from source
+## 14. Build from source
 
 ```bash
 make check-python
@@ -493,9 +714,9 @@ pystamps/data/production.yaml
 
 ---
 
-## 14. Scientific scope
+## 15. Scientific scope
 
-pySTAMPS-GAMMA aims to reproduce the major processing logic of the StaMPS SBAS workflow while providing Python/Rust implementation, GAMMA integration, automatic project discovery, project-relative quality auditing and native acceleration.
+pySTAMPS-GAMMA aims to reproduce the major processing logic of the StaMPS SBAS workflow while providing Python/Rust implementation, GAMMA integration, automatic project discovery, project-relative quality auditing, native acceleration, and automatic engineering-product export.
 
 Important interpretation points:
 
@@ -503,11 +724,13 @@ Important interpretation points:
 - no universal fixed IFG list is embedded in production;
 - reference selection establishes a relative InSAR datum;
 - GACOS performance should be validated per project;
-- a one-LOS vertical approximation requires an explicit horizontal-motion assumption;
+- LOS products remain the primary direct InSAR measurement;
+- a one-LOS vertical approximation requires the explicit assumption that horizontal deformation is negligible;
+- GeoTIFF engineering products use PS-cell aggregation by default rather than hidden spatial interpolation;
 - processing parameters remain project-specific scientific choices.
 
 ---
 
-## 15. Citation
+## 16. Citation
 
 If pySTAMPS-GAMMA is used in scientific work, cite this repository together with the relevant StaMPS, GAMMA, SNAPHU and atmospheric-correction references.

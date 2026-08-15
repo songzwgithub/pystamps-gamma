@@ -9704,236 +9704,195 @@ def _stage5_merge_and_ifgstd_legacy(
 # === MATLAB_STAMPS_SB_STAGE5_ROOT_MERGE_V1 ===
 def stage5_merge_and_ifgstd(
     dataset_root: Path,
+    *,
     backend: str = "auto",
     io_workers: int = 0,
-    mat_cache: dict[Path, dict[str, Any]] | None = None,
     enable_mat_cache: bool = True,
 ) -> str:
     """
-    MATLAB-StaMPS-compatible Stage-5 root merge.
+    Merge Stage-5 patch products using the maintained native
+    Stage-5 merger.
 
-    SB + merge_resample_size > 0:
-        use official weighted grid merge semantics.
+    STAGE5_NATIVE_MERGE_FIX_V1
 
-    Other modes:
-        fall back to the previous Python implementation.
+    The previous Python/auto path depended on the external
+    rebuild_stage5_matlab_sbas_v4.py compatibility helper.
+    That helper is not part of the production repository.
+
+    The Rust implementation is already the maintained Stage-5
+    merged implementation and writes the complete merged bundle,
+    including ifgstd2.mat.
     """
-    import os
-    import subprocess
-    import sys
 
-    dataset_root = Path(dataset_root).resolve()
+    del backend
+    del io_workers
+    del enable_mat_cache
 
-    # --------------------------------------------------------
-    # Read actual project parameters
-    # --------------------------------------------------------
-    parms_path = dataset_root / "parms.mat"
-
-    if parms_path.exists():
-        try:
-            raw_parms = read_mat(parms_path)
-        except Exception:
-            raw_parms = {}
-    else:
-        raw_parms = {}
-
-    small_baseline = (
-        _mat_text(
-            raw_parms.get(
-                "small_baseline_flag",
-                "n",
-            ),
-            "n",
-        ).strip().lower()
-        == "y"
-    )
-
-    # Official StaMPS default:
-    # SB -> merge_resample_size = 100 m
-    default_grid = 100.0 if small_baseline else 0.0
-
-    raw_grid = raw_parms.get(
-        "merge_resample_size",
-        default_grid,
-    )
-
-    try:
-        if raw_grid is None:
-            grid_size = default_grid
-        else:
-            arr = np.asarray(raw_grid)
-            if (
-                arr.size == 0
-                or arr.reshape(-1)[0] is None
-            ):
-                grid_size = default_grid
-            else:
-                grid_size = float(
-                    arr.reshape(-1)[0]
-                )
-    except Exception:
-        grid_size = default_grid
-
-    # --------------------------------------------------------
-    # Non-SB or merge_resample_size == 0:
-    # preserve old Python implementation
-    # --------------------------------------------------------
-    if (
-        not small_baseline
-        or grid_size <= 0
-    ):
-        return _stage5_merge_and_ifgstd_legacy(
-            dataset_root,
-            backend=backend,
-            io_workers=io_workers,
-            mat_cache=mat_cache,
-            enable_mat_cache=enable_mat_cache,
-        )
-
-    # --------------------------------------------------------
-    # SB weighted merge
-    # --------------------------------------------------------
-    project_root = (
-        Path(__file__)
+    root = (
+        Path(dataset_root)
+        .expanduser()
         .resolve()
-        .parents[2]
     )
 
-    helper = (
-        project_root
-        / "rebuild_stage5_matlab_sbas_v4.py"
-    )
-
-    if not helper.exists():
+    if not root.is_dir():
         raise PortedStageError(
-            "Missing MATLAB-compatible Stage5 helper: "
-            f"{helper}"
+            f"Stage 5 dataset root does not exist: {root}"
         )
 
-    workers = 4
+    from pystamps.native import native_binary_command
 
-    if int(io_workers) > 0:
-        workers = max(
-            1,
-            min(
-                4,
-                int(io_workers),
-            ),
-        )
+    command, command_cwd = native_binary_command()
 
-    # Exact MATLAB:
-    #
-    # randn('state',1001);
-    # abs(sum(exp(1j*randn(1000,1)*10*pi/180)))/1000
-    #
-    matlab_max_coh = 0.985723131505055
-
-    cmd = [
-        sys.executable,
-        str(helper),
-
+    full_command = [
+        *command,
+        "stage5-merge",
         "--dataset",
-        str(dataset_root),
-
-        "--max-coh",
-        f"{matlab_max_coh:.15f}",
-
-        "--merge-workers",
-        str(workers),
-
-        "--weight-chunk-rows",
-        "2048",
-
-        "--chunk-cols",
-        "64",
-
-        "--ifgstd-chunk-rows",
-        "4096",
+        str(root),
     ]
 
-    env = os.environ.copy()
-
-    env["OPENBLAS_NUM_THREADS"] = "1"
-    env["OMP_NUM_THREADS"] = "1"
-    env["MKL_NUM_THREADS"] = "1"
-    env["NUMEXPR_NUM_THREADS"] = "1"
-
     print(
-        "[STAGE5] MATLAB StaMPS SB weighted root merge",
-        flush=True,
-    )
-
-    print(
-        f"[STAGE5] merge_resample_size="
-        f"{grid_size:g} m",
-        flush=True,
-    )
-
-    print(
-        f"[STAGE5] max_coh="
-        f"{matlab_max_coh:.15f}",
+        "[STAGE5_MERGE] native START | "
+        + " ".join(full_command),
         flush=True,
     )
 
     try:
-        subprocess.run(
-            cmd,
-            cwd=str(project_root),
-            env=env,
-            check=True,
+        completed = subprocess.run(
+            full_command,
+            cwd=(
+                str(command_cwd)
+                if command_cwd is not None
+                else None
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
         )
-
-    except subprocess.CalledProcessError as exc:
+    except OSError as exc:
         raise PortedStageError(
-            "MATLAB-compatible Stage5 root merge "
-            f"failed, exit={exc.returncode}"
+            "Unable to launch native Stage-5 merger: "
+            f"{exc}"
         ) from exc
 
-    # --------------------------------------------------------
-    # Basic output verification
-    # --------------------------------------------------------
-    required = [
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+
+    if stdout:
+        print(stdout, flush=True)
+
+    if completed.returncode != 0:
+        detail = stderr or stdout or (
+            f"exit code {completed.returncode}"
+        )
+        raise PortedStageError(
+            "Native Stage-5 merge failed: "
+            f"{detail}"
+        )
+
+    required = (
         "ps2.mat",
         "ph2.mat",
         "pm2.mat",
         "bp2.mat",
-        "rc2.mat",
+        "psver.mat",
         "ifgstd2.mat",
-    ]
+    )
 
     missing = [
         name
         for name in required
-        if not (dataset_root / name).exists()
+        if not (root / name).is_file()
     ]
 
     if missing:
         raise PortedStageError(
-            "Stage5 root merge missing outputs: "
+            "Native Stage-5 merge returned successfully "
+            "but required merged outputs are missing: "
             + ", ".join(missing)
         )
 
-    ps2 = read_mat(
-        dataset_root / "ps2.mat"
+    # === STAGE5_IFGDAY_IX_CALL_V1 ===
+    # ifgday_ix is global SBAS network metadata.
+    # Preserve it from Stage-1 PATCH metadata after native merge.
+    from scipy.io import loadmat as _loadmat_ifg, savemat as _savemat_ifg
+
+    _ifg_sources = sorted(root.glob("PATCH_*/ps1.mat"))
+    if not _ifg_sources:
+        raise PortedStageError(
+            "Stage-5 merge cannot preserve ifgday_ix: no PATCH_*/ps1.mat"
+        )
+
+    _ifg_reference = None
+    for _ifg_source in _ifg_sources:
+        _ifg_src = _loadmat_ifg(
+            _ifg_source, squeeze_me=False, struct_as_record=False
+        )
+        if "ifgday_ix" not in _ifg_src:
+            raise PortedStageError(
+                f"{_ifg_source} has no ifgday_ix"
+            )
+        _ifg_arr = np.asarray(_ifg_src["ifgday_ix"])
+        if _ifg_arr.ndim != 2 or 2 not in _ifg_arr.shape:
+            raise PortedStageError(
+                f"{_ifg_source}: invalid ifgday_ix shape {_ifg_arr.shape}"
+            )
+        if _ifg_reference is None:
+            _ifg_reference = _ifg_arr.copy()
+        elif not np.array_equal(_ifg_reference, _ifg_arr):
+            raise PortedStageError(
+                "PATCH Stage-1 products contain inconsistent ifgday_ix"
+            )
+
+    assert _ifg_reference is not None
+    _ps2_path = root / "ps2.mat"
+    _ps2_raw = _loadmat_ifg(
+        _ps2_path, squeeze_me=False, struct_as_record=False
+    )
+    _ps2_existing = _ps2_raw.get("ifgday_ix")
+    _need_ifg_write = True
+    if _ps2_existing is not None:
+        _ps2_existing = np.asarray(_ps2_existing)
+        _need_ifg_write = not (
+            _ps2_existing.shape == _ifg_reference.shape
+            and np.array_equal(_ps2_existing, _ifg_reference)
+        )
+
+    if _need_ifg_write:
+        _ps2_payload = {
+            _k: _v for _k, _v in _ps2_raw.items()
+            if not _k.startswith("__")
+        }
+        _ps2_payload["ifgday_ix"] = _ifg_reference
+        _ps2_tmp = _ps2_path.with_name(
+            _ps2_path.name + ".ifgday_fix.tmp"
+        )
+        _savemat_ifg(
+            _ps2_tmp,
+            _ps2_payload,
+            do_compression=False,
+            long_field_names=True,
+            oned_as="column",
+        )
+        _ps2_tmp.replace(_ps2_path)
+
+    print(
+        "[STAGE5_MERGE] ifgday_ix preserved | "
+        f"shape={_ifg_reference.shape}",
+        flush=True,
     )
 
-    try:
-        n_ps = int(
-            round(
-                float(
-                    np.asarray(
-                        ps2["n_ps"]
-                    ).reshape(-1)[0]
-                )
-            )
-        )
-    except Exception:
-        n_ps = -1
+    print(
+        "[STAGE5_MERGE] native DONE | "
+        f"dataset={root}",
+        flush=True,
+    )
 
     return (
-        "MATLAB StaMPS SB weighted merge complete: "
-        f"{n_ps} root PS"
+        stdout.splitlines()[-1]
+        if stdout
+        else "Stage 5 merged with native backend"
     )
+
 
 
 

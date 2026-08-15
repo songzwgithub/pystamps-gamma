@@ -29,6 +29,8 @@ dependencies = [
   "PyYAML>=6.0",
   "rasterio>=1.5",
   "pyproj>=3.7.2",
+  "matplotlib>=3.9",
+  "pyshp>=2.3",
 ]
 
 [project.optional-dependencies]

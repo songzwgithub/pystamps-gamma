@@ -170,6 +170,39 @@ gacos:
   min_valid_fraction: 0.995
 
 
+
+# Automatic engineering postprocess after successful Stage 8.
+postprocess:
+  enabled: true
+  output_dir: outputs
+
+  chunk_ps: 16384
+  annual_min_obs: 6
+  annual_min_span_days: 180.0
+
+  figures: true
+  shapefile: true
+  timeseries_shapefile: true
+
+  # PS-cell arithmetic mean only; no spatial interpolation.
+  geotiff: true
+  grid_resolution_m: 100.0
+
+  # Optional LOS -> vertical conversion.
+  # Assumption: horizontal deformation is negligible.
+  vertical_enabled: false
+
+  # auto | la2 | constant
+  # auto prefers per-PS incidence angle from merged la2.mat.
+  vertical_incidence_source: auto
+
+  # constant mode value, or auto fallback if la2.mat is unavailable.
+  vertical_incidence_deg: null
+
+  # up   : uplift positive, subsidence negative
+  # down : subsidence positive, uplift negative
+  vertical_positive: up
+
 reference:
   # Priority:
   # 1. longitude + latitude set -> explicit reference.

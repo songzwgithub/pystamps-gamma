@@ -863,6 +863,10 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                                 details=str(exc),
                             )
                         )
+
+                        # === STAGE5_MERGE_FAILFAST_V1 ===
+                        # Stage 6-8 depend on merged Stage-5 products.
+                        break
             else:
                 try:
                     if task_kind == "cpu":
@@ -887,4 +891,59 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                             details=str(exc),
                         )
                     )
+    # === ENGINEERING_POSTPROCESS_AUTO_V1 ===
+    if (
+        context.end_step >= 8
+        and not context.dry_run
+        and context.run_config.postprocess.enabled
+    ):
+        stage8_ok = any(
+            result.stage_id == 8
+            and result.scope == "merged"
+            and result.status in {"completed", "skipped_existing"}
+            for result in report.results
+        )
+
+        upstream_failed = any(
+            result.status == "failed"
+            and result.stage_id <= 8
+            for result in report.results
+        )
+
+        if stage8_ok and not upstream_failed:
+            from pystamps.pipeline.postprocess_runner import (
+                run_engineering_postprocess,
+            )
+
+            started = time.perf_counter()
+
+            try:
+                details = run_engineering_postprocess(
+                    dataset.root,
+                    context.run_config.postprocess,
+                )
+
+                report.add(
+                    StageResult(
+                        stage_id=9,
+                        scope="merged",
+                        target="outputs",
+                        status="completed",
+                        details=details,
+                        duration_sec=time.perf_counter() - started,
+                    )
+                )
+
+            except Exception as exc:
+                report.add(
+                    StageResult(
+                        stage_id=9,
+                        scope="merged",
+                        target="outputs",
+                        status="failed",
+                        details=str(exc),
+                        duration_sec=time.perf_counter() - started,
+                    )
+                )
+
     return report

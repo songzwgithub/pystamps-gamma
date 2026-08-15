@@ -230,6 +230,87 @@ class GacosConfig:
             )
 
 
+# === ENGINEERING_POSTPROCESS_CONFIG_V1 ===
+@dataclass(slots=True)
+class PostprocessConfig:
+    enabled: bool = True
+    output_dir: str = "outputs"
+
+    chunk_ps: int = 16384
+    annual_min_obs: int = 6
+    annual_min_span_days: float = 180.0
+
+    figures: bool = True
+    shapefile: bool = True
+    timeseries_shapefile: bool = True
+    geotiff: bool = True
+    grid_resolution_m: float = 100.0
+
+    # === VERTICAL_CONVERSION_CONFIG_V1 ===
+    # LOS -> vertical conversion. Horizontal motion is assumed negligible.
+    vertical_enabled: bool = False
+
+    # auto | la2 | constant
+    vertical_incidence_source: str = "auto"
+    vertical_incidence_deg: float | None = None
+
+    # up: uplift positive; down: subsidence positive
+    vertical_positive: str = "up"
+
+    def __post_init__(self) -> None:
+        if int(self.chunk_ps) <= 0:
+            raise ConfigError("postprocess.chunk_ps must be positive")
+        if int(self.annual_min_obs) < 2:
+            raise ConfigError("postprocess.annual_min_obs must be >= 2")
+        if float(self.annual_min_span_days) <= 0:
+            raise ConfigError(
+                "postprocess.annual_min_span_days must be positive"
+            )
+        if float(self.grid_resolution_m) <= 0:
+            raise ConfigError(
+                "postprocess.grid_resolution_m must be positive"
+            )
+
+        self.vertical_incidence_source = str(
+            self.vertical_incidence_source
+        ).strip().lower()
+
+        if self.vertical_incidence_source not in {
+            "auto", "la2", "constant"
+        }:
+            raise ConfigError(
+                "postprocess.vertical_incidence_source must be "
+                "auto, la2, or constant"
+            )
+
+        self.vertical_positive = str(
+            self.vertical_positive
+        ).strip().lower()
+
+        if self.vertical_positive not in {"up", "down"}:
+            raise ConfigError(
+                "postprocess.vertical_positive must be up or down"
+            )
+
+        if self.vertical_incidence_deg is not None:
+            angle = float(self.vertical_incidence_deg)
+            if not 0.0 < angle < 90.0:
+                raise ConfigError(
+                    "postprocess.vertical_incidence_deg must be "
+                    "between 0 and 90 degrees"
+                )
+
+        if (
+            self.vertical_enabled
+            and self.vertical_incidence_source == "constant"
+            and self.vertical_incidence_deg is None
+        ):
+            raise ConfigError(
+                "postprocess.vertical_incidence_deg is required "
+                "when vertical_incidence_source=constant"
+            )
+
+
 @dataclass(slots=True)
 class ReferenceConfig:
     mode: str = "auto"
@@ -275,6 +356,7 @@ class RunConfig:
     ifg_selection: IFGSelectionConfig = field(default_factory=IFGSelectionConfig)
     tools: ExternalToolsConfig = field(default_factory=ExternalToolsConfig)
     gacos: GacosConfig = field(default_factory=GacosConfig)
+    postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     compat: CompatibilityConfig = field(default_factory=CompatibilityConfig)
 
@@ -441,6 +523,7 @@ def load_config(path: str | Path | None = None) -> RunConfig:
 
     tools = ExternalToolsConfig(**_as_dict(raw, "tools"))
     gacos = GacosConfig(**_as_dict(raw, "gacos"))
+    postprocess = PostprocessConfig(**_as_dict(raw, "postprocess"))
     reference = ReferenceConfig(**_as_dict(raw, "reference"))
     compat = CompatibilityConfig(**_as_dict(raw, "compat"))
     return RunConfig(ifg_selection=ifg_selection, 
@@ -448,6 +531,7 @@ def load_config(path: str | Path | None = None) -> RunConfig:
         tolerance=tolerance,
         tools=tools,
         gacos=gacos,
+        postprocess=postprocess,
         reference=reference,
         compat=compat,
     )
