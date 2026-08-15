@@ -64,7 +64,7 @@ jobs:
       - name: CLI smoke
         run: |
           pystamps --help
-          pystamps-native --help
+          pystamps-native coverage --start-step 1 --end-step 8
 
       - name: Rust workspace check
         run: cargo check --workspace
