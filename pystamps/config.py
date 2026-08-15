@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.resources import files as resource_files
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ class RuntimeConfig:
     io_workers: int = 8
     cpu_workers: int = 0
     backend: str = "auto"
-    stage2_kernel_backend: str = "auto"
+    stage2_kernel_backend: str = "native"
     stage2_patch_backend_overrides: dict[str, str] = field(default_factory=dict)
     kernel_backend_overrides: dict[str, str] = field(default_factory=dict)
     stage2_native_threads: int = 0
@@ -77,8 +78,8 @@ class IFGSelectionConfig:
     grid_qc_enabled: bool = True
     grid_qc_metric_bad_quantile: float = 0.90
     grid_qc_score_tail_fraction: float = 0.02
-    grid_qc_score_z_threshold: float = 1.5
-    grid_qc_extreme_z_threshold: float = 3.5
+    grid_qc_score_z_threshold: float = 2.5
+    grid_qc_extreme_z_threshold: float = 4.5
     grid_qc_min_bad_metrics: int = 2
     grid_qc_max_drop_fraction: float = 0.05
     grid_qc_preserve_network: bool = True
@@ -101,7 +102,7 @@ class IFGSelectionConfig:
     # FINAL IFG-QC.
     # Default False preserves backward compatibility;
     # production.yaml explicitly enables it.
-    final_ifg_qc_enabled: bool = False
+    final_ifg_qc_enabled: bool = True
 
     final_qc_msd_strong_percentile: float = 0.975
     final_qc_msd_extreme_percentile: float = 0.990
@@ -245,11 +246,38 @@ def _as_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def load_config(path: str | Path | None = None) -> RunConfig:
-    if path is None:
-        return RunConfig()
+def _load_packaged_production_raw() -> dict[str, Any]:
+    # Single production-default source for config-less execution.
+    resource = (
+        resource_files("pystamps")
+        .joinpath("data")
+        .joinpath("production.yaml")
+    )
 
-    raw = _load_raw(Path(path))
+    try:
+        text = resource.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            "Installed pySTAMPS package does not contain "
+            "pystamps/data/production.yaml"
+        ) from exc
+
+    payload = yaml.safe_load(text) or {}
+
+    if not isinstance(payload, dict):
+        raise ConfigError(
+            "Bundled production configuration must be an object"
+        )
+
+    return payload
+
+
+def load_config(path: str | Path | None = None) -> RunConfig:
+    raw = (
+        _load_packaged_production_raw()
+        if path is None
+        else _load_raw(Path(path))
+    )
     runtime_payload = _as_dict(raw, "runtime")
     runtime_norm = dict(runtime_payload)
     if "backend" in runtime_norm:

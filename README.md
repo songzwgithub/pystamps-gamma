@@ -1,132 +1,159 @@
 # pySTAMPS-GAMMA
 
-**pySTAMPS-GAMMA** is a Python/Rust StaMPS-compatible processing workflow for GAMMA SBAS/InSAR projects.
+**pySTAMPS-GAMMA** is a Python/Rust StaMPS-compatible processing workflow for GAMMA SBAS/InSAR time-series projects.
 
-The production workflow is project-local: create a working directory inside a GAMMA project, generate `pystamps.yaml` once, and run Stage 1–8 directly with the `pystamps` command.
-
-## Quick start
-
-Typical project layout:
-
-```text
-PROJECT/
-├── RSLC_cropped/          # or RSLC/
-├── RSLC_tab
-├── MLI_dir/               # or MLI/
-├── DEM_prep/              # or DEM/
-├── DIFF/                  # or DIFF_dir/
-├── itab
-└── pystamps/              # pySTAMPS working directory
-```
-
-Generate a project-local configuration and run the full workflow:
+Recommended production usage:
 
 ```bash
 cd PROJECT/pystamps
 pystamps -g
-
-pystamps run \
-  --start-step 1 \
-  --end-step 8
+pystamps run --start-step 1 --end-step 8
 ```
 
-For normal production use, a repository-level `--config` path and an explicit `--dataset` path are not required.
+For normal production use, an explicit repository-level `--config` path and an explicit `--dataset` path are not required.
 
 ---
 
-## 1. Repository structure
+## 1. Requirements
+
+### Python
+
+pySTAMPS-GAMMA requires:
 
 ```text
-pystamps-main/
-├── Cargo.lock
-├── Cargo.toml
-├── LICENSE
-├── MANIFEST.in
-├── Makefile
-├── README.md
-├── pyproject.toml
-├── setup.cfg
-├── setup.py
-│
-├── config/
-│   └── production.yaml
-│
-├── crates/                    # Rust crates / native components
-├── src/                       # PyO3/Rust extension source
-│
-├── pystamps/                  # Main Python package
-│   ├── compat/
-│   ├── data/
-│   │   ├── production.yaml    # Installed template used by `pystamps -g`
-│   │   └── *.json
-│   ├── io/
-│   ├── kernels/
-│   ├── notebooks/
-│   ├── pipeline/
-│   ├── prep/
-│   └── runtime/
-│
-├── scripts/                   # Formal user-facing utilities only
-│   ├── pipeline/
-│   │   └── prepare_gamma_sbas.py
-│   ├── corrections/
-│   │   ├── prepare_deramp.py
-│   │   └── prepare_gacos.py
-│   ├── postprocess/
-│   │   └── postprocess.py
-│   └── validate_audit.py
-│
-└── tests/
-    ├── test_*.py
-    └── scripts/               # parity / development / validation utilities
+Python >= 3.12
 ```
 
-Development, project-specific, historical and parity helpers belong under:
+A dedicated Conda environment is recommended:
 
-```text
-tests/scripts/
-tests/scripts/dev/
+```bash
+conda create -n pystamps python=3.12 -y
+conda activate pystamps
 ```
 
-Generated files are not source-release content:
+### GAMMA
+
+GAMMA Remote Sensing Software is an external dependency and is not distributed with this repository.
+
+### Rust / Cargo
+
+Rust is required when installing or building pySTAMPS-GAMMA from source.
+
+```bash
+cargo --version
+rustc --version
+```
+
+If Rust is not installed:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+A compatible prebuilt wheel already contains the compiled PyO3 extension.
+
+---
+
+## 2. SNAPHU — required for Stage 6
+
+**SNAPHU is required for the production Stage-6 unwrapping workflow.**
+
+Check:
+
+```bash
+command -v snaphu
+snaphu -h
+```
+
+### Conda installation
+
+```bash
+conda install -c conda-forge snaphu
+```
+
+Verify:
+
+```bash
+command -v snaphu
+snaphu -h
+```
+
+### Stanford source installation
+
+Example using SNAPHU 2.0.7:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential wget
+
+cd /tmp
+
+wget \
+  https://web.stanford.edu/group/radar/softwareandlinks/sw/snaphu/snaphu-v2.0.7.tar.gz
+
+tar -xzf snaphu-v2.0.7.tar.gz
+cd snaphu-v2.0.7/src
+
+make
+sudo install -m 0755 snaphu /usr/local/bin/snaphu
+```
+
+Verify:
+
+```bash
+command -v snaphu
+snaphu -h
+```
+
+Configuration:
+
+```yaml
+tools:
+  snaphu: snaphu
+```
+
+An absolute executable path can also be configured.
+
+---
+
+## 3. Triangle — optional
+
+**The external `triangle` executable is not mandatory in the current pySTAMPS-GAMMA production workflow.**
+
+When Triangle is available, pySTAMPS-GAMMA uses it for StaMPS-style Delaunay edge construction. When it is unavailable, the current Python Stage-6/7/8 implementations use SciPy Delaunay fallback paths.
 
 ```text
-target/
-build/
-dist/
-__pycache__/
-*.pyc
-*.so
-_archive/
+SNAPHU   required
+Triangle optional
+```
+
+For maximum reproducibility against the traditional StaMPS Linux/Triangle path, Triangle is recommended but not required.
+
+Check:
+
+```bash
+command -v triangle || echo "Triangle not installed; SciPy Delaunay fallback will be used."
+```
+
+Configuration:
+
+```yaml
+tools:
+  triangle: triangle
+  snaphu: snaphu
 ```
 
 ---
 
-## 2. Installation
-
-Linux is recommended for the production GAMMA/SNAPHU workflow.
-
-Typical external requirements:
-
-```text
-GAMMA Remote Sensing Software
-SNAPHU
-Python
-Rust toolchain
-C/C++ build environment
-GDAL / PROJ for GIS workflows
-```
-
-GAMMA and SNAPHU are external software and are not distributed with this repository.
-
-Clone and install:
+## 4. Installation
 
 ```bash
 git clone https://github.com/songzwgithub/pystamps-gamma.git
 cd pystamps-gamma
 
 python -m pip install --upgrade pip
-pip install -e .
+python -m pip install .
 ```
 
 Verify:
@@ -136,77 +163,62 @@ python -c "import pystamps; print(pystamps.__version__)"
 pystamps --help
 ```
 
-Manual Rust build:
+Native extension:
 
 ```bash
-cargo build --release
+python - <<'PY'
+import pystamps
+import pystamps.kernels._stage2_native as native
+print("pySTAMPS:", pystamps.__version__)
+print("native:", native.__file__)
+PY
 ```
-
-Rust build products are written under `target/` and should not be committed as source.
 
 ---
 
-## 3. Local configuration
-
-### 3.1 Generate `pystamps.yaml`
-
-The recommended interface is:
-
-```bash
-pystamps -g
-```
-
-This creates:
+## 5. Typical GAMMA project layout
 
 ```text
-./pystamps.yaml
+PROJECT/
+├── RSLC_cropped/          # or RSLC/
+├── RSLC_tab
+├── MLI_dir/               # or MLI/
+├── DEM_prep/              # or DEM/
+├── DIFF/                  # or DIFF_dir/
+├── itab
+└── pystamps/
 ```
 
-Other supported forms:
-
-```bash
-# Custom filename
-pystamps -g project.yaml
-
-# Overwrite an existing generated config
-pystamps -g --force-config
-```
-
-The production template is distributed inside the installed package as:
-
-```text
-pystamps/data/production.yaml
-```
-
-Users therefore do not need to locate `config/production.yaml` inside the source repository.
-
-### 3.2 Config discovery
-
-Configuration priority is:
-
-```text
-explicit --config
-    ↓
-./pystamps.yaml
-./pystamps.yml
-./production.yaml
-./production.yml
-    ↓
-RunConfig defaults
-```
-
-Normal production usage is therefore:
+Run:
 
 ```bash
 cd PROJECT/pystamps
+pystamps -g
 pystamps run --start-step 1 --end-step 8
 ```
 
 ---
 
-## 4. Project paths
+## 6. Configuration discovery
 
-The generated configuration starts with:
+```text
+explicit --config
+        ↓
+./pystamps.yaml
+./pystamps.yml
+./production.yaml
+./production.yml
+        ↓
+packaged pystamps/data/production.yaml
+```
+
+For reproducibility, keeping a project-local `pystamps.yaml` is recommended.
+
+---
+
+## 7. Project paths
+
+Generated defaults:
 
 ```yaml
 paths:
@@ -222,21 +234,14 @@ paths:
   itab: null
 ```
 
-With these defaults:
+Meaning:
 
 ```text
 work_dir = current working directory
 data_dir = parent directory of work_dir
 ```
 
-For example, when running from `PROJECT/pystamps`:
-
-```text
-work_dir = PROJECT/pystamps
-data_dir = PROJECT
-```
-
-Supported automatic directory names:
+Automatic directory names:
 
 | Input | Accepted names |
 |---|---|
@@ -247,214 +252,80 @@ Supported automatic directory names:
 | acquisition table | `RSLC_tab` |
 | SB network | `itab` |
 
-If both `RSLC/` and `RSLC_cropped/` are present, the resolver uses project information including `RSLC_tab` rather than blindly selecting by directory name.
-
-If both `DIFF/` and `DIFF_dir/` are present, the resolver checks consistency with the current `itab` network.
-
-If automatic discovery remains ambiguous, set the path explicitly:
-
-```yaml
-paths:
-  work_dir: null
-  data_dir: null
-
-  rslc_dir: RSLC_cropped
-  diff_dir: DIFF_dir
-  mli_dir: MLI_dir
-  dem_dir: DEM_prep
-
-  rslc_tab: RSLC_tab
-  itab: itab
-```
-
-Relative component paths are interpreted relative to `data_dir`.
+Explicit paths override automatic discovery.
 
 ---
 
-## 5. Normal command-line usage
+## 8. Production defaults
 
-Full Stage 1–8:
+```yaml
+runtime:
+  backend: auto
+  stage2_kernel_backend: native
 
-```bash
-pystamps run \
-  --start-step 1 \
-  --end-step 8
+ifg_selection:
+  mode: auto
+  final_ifg_qc_enabled: true
+  final_qc_preserve_network: true
+
+reference:
+  mode: auto
+
+tools:
+  triangle: triangle
+  snaphu: snaphu
 ```
 
-Stage 1–5:
+No fixed project-specific IFG rejection list is embedded in production configuration.
+
+---
+
+## 9. Stage commands
 
 ```bash
+pystamps run --start-step 1 --end-step 8
 pystamps run --start-step 1 --end-step 5
-```
-
-Stage 6 only:
-
-```bash
 pystamps run --start-step 6 --end-step 6
-```
-
-Stage 7 only:
-
-```bash
 pystamps run --start-step 7 --end-step 7
-```
-
-Stage 8 only:
-
-```bash
 pystamps run --start-step 8 --end-step 8
-```
-
-Stage 6–8:
-
-```bash
 pystamps run --start-step 6 --end-step 8
 ```
 
-Completed stages may be detected automatically and reported as:
+Completed products may be reported as:
 
 ```text
 status: skipped_existing
 ```
 
-rather than being recomputed.
-
-Explicit overrides remain available when needed:
-
-```bash
-pystamps \
-  --config custom.yaml \
-  run \
-  --dataset /PROJECT/pystamps_test \
-  --data-dir /PROJECT \
-  --start-step 1 \
-  --end-step 8
-```
-
-Priority is:
-
-```text
-CLI override
-    ↓
-YAML configuration
-    ↓
-automatic project discovery
-```
-
 ---
 
-## 6. Startup path report
-
-A normal run reports the resolved configuration and GAMMA inputs:
-
-```text
-[CONFIG] /PROJECT/pystamps/pystamps.yaml
-
-============================================================
-pySTAMPS PROJECT PATHS
-============================================================
-work_dir : /PROJECT/pystamps [cwd]
-data_dir : /PROJECT [work_dir.parent]
-
-GAMMA INPUTS
-RSLC     : /PROJECT/RSLC_cropped
-DIFF     : /PROJECT/DIFF
-MLI      : /PROJECT/MLI_dir
-DEM      : /PROJECT/DEM_prep
-RSLC_tab : /PROJECT/RSLC_tab
-itab     : /PROJECT/itab
-============================================================
-```
-
-Check this report before the first production run.
-
----
-
-## 7. Stage 1–5: PS estimation and selection
-
-Stages 1–5 perform project preparation, phase-stability estimation, probabilistic PS selection and weed/final PS selection.
-
-The production workflow follows StaMPS-style phase-stability logic rather than selecting the final PS set from a single fixed GAMMA coherence threshold.
-
-Key concepts:
-
-```text
-candidate preparation
-phase stability
-gamma estimation
-random-phase probability
-density control
-PS selection
-spatial weed
-temporal weed
-final PS merge
-```
-
-Run:
-
-```bash
-pystamps run --start-step 1 --end-step 5
-```
-
-Separate legacy Stage 1–5 repository shell wrappers are not required for normal production processing.
-
----
-
-## 8. Stage 6: SB unwrapping and inversion
-
-Stage 6 performs:
+## 10. Stage 6
 
 ```text
 SB interferometric phase
-        │
-        ▼
+        ↓
 3-D unwrapping preparation
-        │
-        ▼
+        ↓
 SNAPHU
-        │
-        ▼
+        ↓
 unwrapped SB interferograms
-        │
-        ▼
-SB network inversion
-        │
-        ▼
+        ↓
+network diagnostics / MSD
+        ↓
+automatic FINAL IFG-QC
+        ↓
+network-connectivity protection
+        ↓
+selected-network inversion
+        ↓
 single-master acquisition phase
 ```
 
-Run:
-
-```bash
-pystamps run --start-step 6 --end-step 6
-```
-
-Typical Stage 6 products include:
-
-```text
-phuw_sb2.mat
-phuw2.mat
-phuw_sb_res2.mat
-```
-
-Stage 6 includes automatic CPU/RAM-aware scheduling, parallel independent-IFG unwrapping, project-relative IFG quality auditing, post-unwrapped network consistency evaluation, network-connectivity protection, and final re-inversion using retained interferograms.
-
-Production IFG selection is project-relative:
-
-```yaml
-ifg_selection:
-  mode: auto
-```
-
-Project-specific interferogram indices are not intended to be hard-coded into the production configuration.
+IFG rejection is project-relative, not a hard-coded universal index list.
 
 ---
 
-## 9. Reference selection
-
-Automatic reference-region selection is supported.
-
-Typical configuration:
+## 11. Reference selection
 
 ```yaml
 reference:
@@ -464,136 +335,11 @@ reference:
   radius_m: 500.0
 ```
 
-If longitude and latitude are provided, a fixed reference can be used.
-
-An automatically selected high-quality reference region is a **relative InSAR reference**. It is not proof that the physical deformation at that location is exactly zero.
+Automatic reference selection establishes a relative InSAR datum; it does not prove zero physical deformation.
 
 ---
 
-## 10. Stage 7: SCLA
-
-Stage 7 estimates spatially correlated look-angle / topographic phase error.
-
-```bash
-pystamps run --start-step 7 --end-step 7
-```
-
-Typical products:
-
-```text
-scla_sb2.mat
-scla_smooth_sb2.mat
-scla2.mat
-```
-
-Typical fields include:
-
-```text
-ph_scla
-K_ps_uw
-C_ps_uw
-```
-
----
-
-## 11. Stage 8: spatially correlated noise
-
-Stage 8 estimates spatially correlated noise after preceding correction terms.
-
-```bash
-pystamps run --start-step 8 --end-step 8
-```
-
-Typical output:
-
-```text
-scn2.mat
-```
-
-with fields such as:
-
-```text
-ph_scn_slave
-ph_hpt
-ph_ramp
-```
-
-Conceptually:
-
-```text
-phase_corrected
-    = phase_unwrapped
-    - SCLA
-    - constant phase term
-    - SCN
-```
-
----
-
-## 12. DERAMP and optional GACOS
-
-Formal helpers:
-
-```bash
-python scripts/corrections/prepare_deramp.py --help
-python scripts/corrections/prepare_gacos.py --help
-```
-
-GACOS is optional and should be treated as an atmospheric-correction branch rather than an unconditional requirement.
-
-For GAMMA LOS-vector geometry:
-
-```text
-lv_theta = LOS elevation angle above horizontal
-incidence_angle = 90° - lv_theta
-cos(incidence_angle) = sin(lv_theta)
-```
-
-Do not substitute a DEM-local incidence-angle raster without verifying that its geometric definition is equivalent.
-
----
-
-## 13. Post-processing
-
-Formal helper:
-
-```bash
-python scripts/postprocess/postprocess.py --help
-```
-
-Phase-to-LOS conversion:
-
-```text
-D_LOS = -phase * wavelength / (4*pi)
-```
-
-For millimetres:
-
-```text
-D_LOS_mm = -phase * wavelength / (4*pi) * 1000
-```
-
-Sign convention:
-
-```text
-positive LOS displacement = toward satellite
-negative LOS displacement = away from satellite
-```
-
-Where horizontal deformation is assumed negligible:
-
-```text
-D_vertical = D_LOS / cos(incidence_angle)
-V_vertical = V_LOS / cos(incidence_angle)
-```
-
-This is a zero-horizontal-motion approximation, not a full LOS decomposition.
-
----
-
-## 14. Formal user-facing scripts
-
-The release `scripts/` directory should contain only user-facing production utilities:
+## 12. Source-checkout utilities
 
 ```text
 scripts/pipeline/prepare_gamma_sbas.py
@@ -603,88 +349,47 @@ scripts/postprocess/postprocess.py
 scripts/validate_audit.py
 ```
 
-Inspect options with:
+The main installed interface is:
 
 ```bash
-python scripts/pipeline/prepare_gamma_sbas.py --help
-python scripts/corrections/prepare_deramp.py --help
-python scripts/corrections/prepare_gacos.py --help
-python scripts/postprocess/postprocess.py --help
-python scripts/validate_audit.py --help
+pystamps
 ```
-
-Parity, benchmark, historical and project-specific helpers belong under:
-
-```text
-tests/scripts/
-tests/scripts/dev/
-```
-
-They are not part of the normal end-user workflow.
 
 ---
 
-## 15. Testing and release checks
-
-Run the test suite:
+## 13. Build from source
 
 ```bash
-python -m pytest -q
+make check-python
+make check-rust
+make check-runtime
+make build
 ```
 
-Check for generated artifacts before release:
-
-```bash
-find . \
-  \( \
-    -name '*.so' \
-    -o -name '*.pyc' \
-    -o -name '*.bak' \
-    -o -name '*.old' \
-    -o -name '*.tmp' \
-    -o -name '*broken*' \
-    -o -name '*before_*' \
-    -o -name '__pycache__' \
-  \) \
-  -print
-```
-
-Typical package validation:
-
-```bash
-python -m pytest -q
-python -m build --sdist --wheel
-python -m twine check dist/*
-```
-
-The installed package must contain:
+The wheel must contain:
 
 ```text
+pystamps/kernels/_stage2_native.*.so
 pystamps/data/production.yaml
 ```
 
-because it is the template used by:
+---
 
-```bash
-pystamps -g
-```
+## 14. Scientific scope
+
+pySTAMPS-GAMMA aims to reproduce the major processing logic of the StaMPS SBAS workflow while providing Python/Rust implementation, GAMMA integration, automatic project discovery, project-relative quality auditing and native acceleration.
+
+Important interpretation points:
+
+- automatic IFG rejection is project-relative;
+- no universal fixed IFG list is embedded in production;
+- reference selection establishes a relative InSAR datum;
+- GACOS performance should be validated per project;
+- a one-LOS vertical approximation requires an explicit horizontal-motion assumption;
+- processing parameters remain project-specific scientific choices.
 
 ---
 
-## 16. Scientific scope
+## 15. Citation
 
-pySTAMPS-GAMMA is intended to reproduce the major processing logic of the StaMPS SBAS workflow while providing a Python-oriented implementation, GAMMA integration, automatic project discovery, quality auditing and native acceleration.
-
-Important interpretation notes:
-
-- automatic IFG rejection is project-relative quality control, not a universal fixed index list;
-- automatic reference selection identifies a high-quality relative reference, not guaranteed zero deformation;
-- GACOS should be validated for each project rather than assumed to improve every dataset;
-- vertical displacement from one LOS geometry requires an explicit horizontal-motion assumption;
-- processing parameters should be evaluated for the sensor, multilook geometry, temporal network and deformation regime.
-
----
-
-## 17. Citation
-
-If pySTAMPS-GAMMA is used in scientific work, cite this software repository together with the relevant references for StaMPS, GAMMA, SNAPHU and any atmospheric-correction method or dataset used in the processing configuration.
+If pySTAMPS-GAMMA is used in scientific work, cite this repository together with the relevant StaMPS, GAMMA, SNAPHU and atmospheric-correction references.

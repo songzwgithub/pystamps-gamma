@@ -1,33 +1,43 @@
 include README.md
 include LICENSE
 include Cargo.toml
+include Cargo.lock
+
 recursive-include src *.rs
 recursive-include crates Cargo.toml *.rs
+recursive-include crates LICENSE LICENSE-*
+
 recursive-include pystamps/data *.json
-recursive-include pystamps/data *.yaml *.yml
-recursive-include docs *.md
+recursive-include pystamps/data *.yaml
+recursive-include pystamps/data *.yml
+
 prune dist
 prune build
+prune target
+prune bin
+prune scripts
+prune tests
+prune docs
+prune notebooks
+prune tools
+prune tmp
+prune _archive
+prune inputs_and_outputs
+prune StaMPS
+
 prune .pytest_cache
 prune .ruff_cache
 prune .mypy_cache
 prune .venv
 prune .codex
 prune .github
-prune inputs_and_outputs
-prune scripts
-prune tests
-prune tmp
-prune StaMPS
-prune templates
-prune pystamps.egg-info
 prune .agents
 prune .runs
 prune .ralph
+
 global-exclude __pycache__
 global-exclude *.py[cod]
-prune _archive
-prune target
-prune bin
-prune tools
-prune notebooks
+global-exclude *.so
+global-exclude *.pyd
+global-exclude *.dll
+global-exclude *.dylib
