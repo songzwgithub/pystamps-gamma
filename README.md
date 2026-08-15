@@ -63,7 +63,41 @@ A compatible prebuilt wheel already contains the compiled PyO3 extension.
 
 ---
 
-## 2. SNAPHU — required for Stage 6
+## 2. Installation
+
+```bash
+git clone https://github.com/songzwgithub/pystamps-gamma.git
+cd pystamps-gamma
+
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+For normal installation, do not use `--no-deps`; dependency resolution must retain the project constraints, including `numpy>=2.2,<2.4`.
+
+Verify:
+
+```bash
+python -c "import pystamps; print(pystamps.__version__)"
+pystamps --help
+```
+
+Native extension:
+
+```bash
+python - <<'PY'
+import pystamps
+import pystamps.kernels._stage2_native as native
+
+print("pySTAMPS:", pystamps.__version__)
+print("native:", native.__file__)
+PY
+```
+
+
+---
+
+## 3. SNAPHU — required for Stage 6
 
 **SNAPHU is required for the production Stage-6 unwrapping workflow.**
 
@@ -122,40 +156,6 @@ tools:
 ```
 
 An absolute executable path can also be configured.
-
----
-
-## 3. Installation
-
-```bash
-git clone https://github.com/songzwgithub/pystamps-gamma.git
-cd pystamps-gamma
-
-python -m pip install --upgrade pip
-python -m pip install .
-```
-
-For normal installation, do not use `--no-deps`; dependency resolution must retain the project constraints, including `numpy>=2.2,<2.4`.
-
-Verify:
-
-```bash
-python -c "import pystamps; print(pystamps.__version__)"
-pystamps --help
-```
-
-Native extension:
-
-```bash
-python - <<'PY'
-import pystamps
-import pystamps.kernels._stage2_native as native
-
-print("pySTAMPS:", pystamps.__version__)
-print("native:", native.__file__)
-PY
-```
-
 ---
 
 ## 4. Typical GAMMA project layout
