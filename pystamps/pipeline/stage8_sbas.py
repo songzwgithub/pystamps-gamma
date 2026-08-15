@@ -369,6 +369,7 @@ def _temporal_weight_matrix(
 def _preflight(
     root: Path,
     triangle_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> None:
 
     root = root.expanduser().resolve()
@@ -406,7 +407,7 @@ def _preflight(
     )
 
     phuw = read_mat_variables(
-        root / "phuw2.mat",
+        root / phase_file,
         ("ph_uw",),
     )
 
@@ -576,6 +577,7 @@ def stage8_sbas_filter_scn(
     | None = None,
     triangle_path: str | None = None,
     snaphu_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> str:
 
     del (
@@ -775,7 +777,7 @@ def stage8_sbas_filter_scn(
 
         ph_sm = _as_rows(
             read_mat_variables(
-                root / "phuw2.mat",
+                root / phase_file,
                 ("ph_uw",),
             )["ph_uw"],
             n_ps,

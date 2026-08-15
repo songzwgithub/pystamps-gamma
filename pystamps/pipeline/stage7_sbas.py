@@ -648,6 +648,7 @@ def _make_phase_model(
 def _preflight(
     root: Path,
     triangle_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> None:
 
     root = root.expanduser().resolve()
@@ -713,7 +714,7 @@ def _preflight(
     )
 
     sm = read_mat(
-        root / "phuw2.mat"
+        root / phase_file
     )
 
     bp = read_mat_variables(
@@ -1037,6 +1038,7 @@ def stage7_sbas_calc_scla(
     mat_cache: dict[Path, dict[str, Any]]
     | None = None,
     triangle_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> str:
 
     del (
@@ -1707,7 +1709,7 @@ def stage7_sbas_calc_scla(
         t_final = time.perf_counter()
 
         sm_payload = read_mat(
-            root / "phuw2.mat"
+            root / phase_file
         )
 
         ph_sm = _as_rows(

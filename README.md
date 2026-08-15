@@ -31,6 +31,8 @@ conda create -n pystamps python=3.12 -y
 conda activate pystamps
 ```
 
+The normal package installation installs the required Python dependencies, including `rasterio` and `pyproj` used by the GACOS workflow.
+
 ### GAMMA
 
 GAMMA Remote Sensing Software is an external dependency and is not distributed with this repository.
@@ -117,36 +119,7 @@ An absolute executable path can also be configured.
 
 ---
 
-## 3. Triangle — optional
-
-**The external `triangle` executable is not mandatory in the current pySTAMPS-GAMMA production workflow.**
-
-When Triangle is available, pySTAMPS-GAMMA uses it for StaMPS-style Delaunay edge construction. When it is unavailable, the current Python Stage-6/7/8 implementations use SciPy Delaunay fallback paths.
-
-```text
-SNAPHU   required
-Triangle optional
-```
-
-For maximum reproducibility against the traditional StaMPS Linux/Triangle path, Triangle is recommended but not required.
-
-Check:
-
-```bash
-command -v triangle || echo "Triangle not installed; SciPy Delaunay fallback will be used."
-```
-
-Configuration:
-
-```yaml
-tools:
-  triangle: triangle
-  snaphu: snaphu
-```
-
----
-
-## 4. Installation
+## 3. Installation
 
 ```bash
 git clone https://github.com/songzwgithub/pystamps-gamma.git
@@ -176,7 +149,7 @@ PY
 
 ---
 
-## 5. Typical GAMMA project layout
+## 4. Typical GAMMA project layout
 
 ```text
 PROJECT/
@@ -199,7 +172,7 @@ pystamps run --start-step 1 --end-step 8
 
 ---
 
-## 6. Configuration discovery
+## 5. Configuration discovery
 
 ```text
 explicit --config
@@ -216,7 +189,7 @@ For reproducibility, keeping a project-local `pystamps.yaml` is recommended.
 
 ---
 
-## 7. Project paths
+## 6. Project paths
 
 Generated defaults:
 
@@ -256,7 +229,7 @@ Explicit paths override automatic discovery.
 
 ---
 
-## 8. Production defaults
+## 7. Production defaults
 
 ```yaml
 runtime:
@@ -271,6 +244,10 @@ ifg_selection:
 reference:
   mode: auto
 
+gacos:
+  enabled: false
+  gacos_dir: null
+
 tools:
   triangle: triangle
   snaphu: snaphu
@@ -280,7 +257,7 @@ No fixed project-specific IFG rejection list is embedded in production configura
 
 ---
 
-## 9. Stage commands
+## 8. Stage commands
 
 ```bash
 pystamps run --start-step 1 --end-step 8
@@ -299,7 +276,7 @@ status: skipped_existing
 
 ---
 
-## 10. Stage 6
+## 9. Stage 6
 
 ```text
 SB interferometric phase
@@ -325,7 +302,7 @@ IFG rejection is project-relative, not a hard-coded universal index list.
 
 ---
 
-## 11. Reference selection
+## 10. Reference selection
 
 ```yaml
 reference:
@@ -336,6 +313,130 @@ reference:
 ```
 
 Automatic reference selection establishes a relative InSAR datum; it does not prove zero physical deformation.
+
+---
+
+## 11. GACOS — optional
+
+GACOS atmospheric correction is optional and disabled by default.
+
+For the SBAS workflow, GACOS is applied to the Stage-6 single-master acquisition-phase product before Stage 7 and Stage 8:
+
+```text
+Stage 6
+    ↓
+phuw2.mat
+    ↓
+optional GACOS correction
+    ↓
+phuw2_gacos.mat
+    ↓
+Stage 7
+    ↓
+Stage 8
+```
+
+When GACOS is disabled, Stage 7 and Stage 8 use the original `phuw2.mat`.
+
+When GACOS is enabled, pySTAMPS-GAMMA generates or reuses `phuw2_gacos.mat`, and Stage 7 and Stage 8 use the corrected phase.
+
+### Supported products
+
+GACOS product format is detected automatically from the files in `gacos_dir`.
+
+Supported forms are:
+
+- GeoTIFF: `*.tif` or `*.tiff`;
+- raw ZTD: `*.ztd` with the corresponding `.rsc` metadata file.
+
+No `product_format` setting is required.
+
+If both GeoTIFF and raw ZTD representations are present for the same acquisition date, the GeoTIFF product is selected deterministically.
+
+### Configuration
+
+Default configuration:
+
+```yaml
+gacos:
+  enabled: false
+  gacos_dir: null
+  product_unit: auto
+  projection: zenith
+  sign: auto
+  strict_dates: true
+  rebuild: false
+  incidence_tif: null
+  incidence_deg: null
+  qa_ps: 30000
+  qa_ifg: 80
+  chunk_ps: 4096
+  min_valid_fraction: 0.995
+```
+
+To enable GACOS:
+
+```yaml
+gacos:
+  enabled: true
+  gacos_dir: /path/to/GACOS
+```
+
+`product_unit: auto` automatically resolves the product unit when possible. `projection: zenith` treats the GACOS product as zenith delay and projects it to LOS using the configured or automatically resolved incidence angle.
+
+For SBAS processing, `phuw2.mat` contains one phase column per acquisition, not one column per SB interferogram. GACOS correction therefore works in the single-master acquisition domain. The atmospheric contribution for each acquisition is referenced to the master acquisition before phase correction.
+
+With `sign: auto`, pySTAMPS-GAMMA evaluates the candidate correction signs from project data and records the selected sign and QA statistics.
+
+### Outputs
+
+Corrected phase:
+
+```text
+phuw2_gacos.mat
+```
+
+GACOS QA/debug information:
+
+```text
+gacos_correction_debug.json
+```
+
+Acquisition/product inventory:
+
+```text
+gacos_date_inventory.csv
+```
+
+Intermediate sampled LOS delays are stored under:
+
+```text
+_gacos_work/
+```
+
+### Stage 7/8 input tracking
+
+Stage 7 and Stage 8 automatically track which phase product generated their outputs:
+
+```text
+gacos.enabled: false
+    → phuw2.mat
+
+gacos.enabled: true
+    → phuw2_gacos.mat
+```
+
+Changing between corrected and uncorrected phase inputs invalidates existing Stage 7/8 results and causes those stages to be recomputed.
+
+Re-running with the same phase input can reuse existing products and may be reported as:
+
+```text
+status: skipped_existing
+```
+
+When `rebuild: true`, the corrected phase is rebuilt once and shared by Stage 7 and Stage 8 within the same pipeline invocation.
+
+GACOS performance remains project-dependent and should be evaluated from the QA output and the resulting displacement time series.
 
 ---
 

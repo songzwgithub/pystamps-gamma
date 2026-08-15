@@ -16,8 +16,8 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
+from pystamps.config import GacosConfig as PipelineGacosConfig
 from pystamps.io.mat import read_mat, read_mat_variables
-from pystamps.pipeline.stage6_sbas import load_sbas_network
 
 
 class GacosCorrectionError(RuntimeError):
@@ -36,9 +36,8 @@ class GacosProduct:
 
 
 @dataclass(slots=True)
-class GacosConfig:
+class ResolvedGacosConfig:
     gacos_dir: Path
-    product_format: str
     product_unit: str
     projection: str
     sign: str
@@ -109,11 +108,69 @@ def _day_labels(day: np.ndarray) -> list[str]:
     )
 
 
-def _resolve_gacos_dir(dataset_root: Path) -> Path:
-    raw = os.environ.get("PYSTAMPS_GACOS_DIR", "").strip()
+def _resolve_optional_path(
+    dataset_root: Path,
+    value: str | None,
+) -> Path | None:
+    if value is None:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    path = Path(raw).expanduser()
+
+    if not path.is_absolute():
+        path = dataset_root / path
+
+    return path.resolve()
+
+
+def _resolve_gacos_dir(
+    dataset_root: Path,
+    configured_dir: str | None = None,
+    *,
+    use_env: bool = True,
+) -> Path:
     candidates: list[Path] = []
-    if raw:
-        candidates.append(Path(raw).expanduser())
+
+    # Explicit YAML config has highest priority.
+    if (
+        configured_dir is not None
+        and str(configured_dir).strip()
+    ):
+        path = Path(
+            str(configured_dir)
+        ).expanduser()
+
+        if not path.is_absolute():
+            path = dataset_root / path
+
+        path = path.resolve()
+
+        if not path.is_dir():
+            raise GacosCorrectionError(
+                "Configured GACOS directory "
+                f"does not exist: {path}"
+            )
+
+        return path
+
+    # Retain legacy environment-variable mode only
+    # for direct/standalone GACOS calls.
+    if use_env:
+        raw = os.environ.get(
+            "PYSTAMPS_GACOS_DIR",
+            "",
+        ).strip()
+
+        if raw:
+            candidates.append(
+                Path(raw).expanduser()
+            )
+
+    # Automatic discovery.
     candidates.extend(
         [
             dataset_root / "GACOS",
@@ -122,51 +179,222 @@ def _resolve_gacos_dir(dataset_root: Path) -> Path:
             dataset_root.parent / "gacos",
         ]
     )
+
     for candidate in candidates:
         resolved = candidate.resolve()
+
         if resolved.is_dir():
             return resolved
+
     raise GacosCorrectionError(
-        "Unable to locate GACOS directory. Set PYSTAMPS_GACOS_DIR=/path/to/GACOS"
+        "Unable to locate GACOS directory. "
+        "Set gacos.gacos_dir in pystamps.yaml "
+        "or place a GACOS/ directory inside or "
+        "beside the pySTAMPS work directory."
     )
 
 
-def _load_config(dataset_root: Path) -> GacosConfig:
-    product_format = os.environ.get("PYSTAMPS_GACOS_FORMAT", "auto").strip().lower()
-    if product_format not in {"auto", "tif", "ztd"}:
-        raise GacosCorrectionError("PYSTAMPS_GACOS_FORMAT must be auto, tif, or ztd")
-    product_unit = os.environ.get("PYSTAMPS_GACOS_UNIT", "auto").strip().lower()
-    if product_unit not in {"auto", "m", "cm", "mm"}:
-        raise GacosCorrectionError("PYSTAMPS_GACOS_UNIT must be auto, m, cm, or mm")
-    projection = os.environ.get("PYSTAMPS_GACOS_PROJECTION", "zenith").strip().lower()
-    if projection not in {"zenith", "los"}:
-        raise GacosCorrectionError("PYSTAMPS_GACOS_PROJECTION must be zenith or los")
-    sign = os.environ.get("PYSTAMPS_GACOS_SIGN", "auto").strip().lower()
-    aliases = {"-": "subtract", "+": "add", "minus": "subtract", "plus": "add"}
-    sign = aliases.get(sign, sign)
-    if sign not in {"auto", "subtract", "add"}:
-        raise GacosCorrectionError("PYSTAMPS_GACOS_SIGN must be auto, subtract, or add")
+def _load_config(
+    dataset_root: Path,
+    settings: PipelineGacosConfig | None = None,
+) -> ResolvedGacosConfig:
 
-    incidence_tif_raw = os.environ.get("PYSTAMPS_GACOS_INCIDENCE_TIF", "").strip()
-    incidence_tif = Path(incidence_tif_raw).expanduser().resolve() if incidence_tif_raw else None
-    incidence_deg_raw = os.environ.get("PYSTAMPS_GACOS_INCIDENCE_DEG", "").strip()
-    incidence_deg = float(incidence_deg_raw) if incidence_deg_raw else None
+    # --------------------------------------------------------
+    # Normal production path: pystamps.yaml
+    # --------------------------------------------------------
+    if settings is not None:
 
-    return GacosConfig(
-        gacos_dir=_resolve_gacos_dir(dataset_root),
-        product_format=product_format,
+        if not bool(settings.enabled):
+            raise GacosCorrectionError(
+                "GACOS correction was invoked while "
+                "gacos.enabled=false"
+            )
+
+        incidence_tif = _resolve_optional_path(
+            dataset_root,
+            settings.incidence_tif,
+        )
+
+        return ResolvedGacosConfig(
+            gacos_dir=_resolve_gacos_dir(
+                dataset_root,
+                settings.gacos_dir,
+                use_env=False,
+            ),
+            product_unit=str(
+                settings.product_unit
+            ).strip().lower(),
+            projection=str(
+                settings.projection
+            ).strip().lower(),
+            sign=str(
+                settings.sign
+            ).strip().lower(),
+            strict_dates=bool(
+                settings.strict_dates
+            ),
+            rebuild=bool(
+                settings.rebuild
+            ),
+            incidence_tif=incidence_tif,
+            incidence_deg=(
+                None
+                if settings.incidence_deg is None
+                else float(settings.incidence_deg)
+            ),
+            qa_ps=max(
+                1000,
+                int(settings.qa_ps),
+            ),
+            qa_ifg=max(
+                10,
+                int(settings.qa_ifg),
+            ),
+            chunk_ps=max(
+                256,
+                int(settings.chunk_ps),
+            ),
+            min_valid_fraction=float(
+                settings.min_valid_fraction
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Legacy direct-call environment-variable path.
+    # Keep backward compatibility.
+    # --------------------------------------------------------
+
+    product_unit = os.environ.get(
+        "PYSTAMPS_GACOS_UNIT",
+        "auto",
+    ).strip().lower()
+
+    if product_unit not in {
+        "auto",
+        "m",
+        "cm",
+        "mm",
+    }:
+        raise GacosCorrectionError(
+            "PYSTAMPS_GACOS_UNIT must be "
+            "auto, m, cm, or mm"
+        )
+
+    projection = os.environ.get(
+        "PYSTAMPS_GACOS_PROJECTION",
+        "zenith",
+    ).strip().lower()
+
+    if projection not in {
+        "zenith",
+        "los",
+    }:
+        raise GacosCorrectionError(
+            "PYSTAMPS_GACOS_PROJECTION must "
+            "be zenith or los"
+        )
+
+    sign = os.environ.get(
+        "PYSTAMPS_GACOS_SIGN",
+        "auto",
+    ).strip().lower()
+
+    aliases = {
+        "-": "subtract",
+        "+": "add",
+        "minus": "subtract",
+        "plus": "add",
+    }
+
+    sign = aliases.get(
+        sign,
+        sign,
+    )
+
+    if sign not in {
+        "auto",
+        "subtract",
+        "add",
+    }:
+        raise GacosCorrectionError(
+            "PYSTAMPS_GACOS_SIGN must be "
+            "auto, subtract, or add"
+        )
+
+    incidence_tif_raw = os.environ.get(
+        "PYSTAMPS_GACOS_INCIDENCE_TIF",
+        "",
+    ).strip()
+
+    incidence_tif = (
+        Path(
+            incidence_tif_raw
+        ).expanduser().resolve()
+        if incidence_tif_raw
+        else None
+    )
+
+    incidence_deg_raw = os.environ.get(
+        "PYSTAMPS_GACOS_INCIDENCE_DEG",
+        "",
+    ).strip()
+
+    incidence_deg = (
+        float(incidence_deg_raw)
+        if incidence_deg_raw
+        else None
+    )
+
+    return ResolvedGacosConfig(
+        gacos_dir=_resolve_gacos_dir(
+            dataset_root,
+            use_env=True,
+        ),
         product_unit=product_unit,
         projection=projection,
         sign=sign,
-        strict_dates=_env_bool("PYSTAMPS_GACOS_STRICT_DATES", True),
-        rebuild=_env_bool("PYSTAMPS_GACOS_REBUILD", False),
+        strict_dates=_env_bool(
+            "PYSTAMPS_GACOS_STRICT_DATES",
+            True,
+        ),
+        rebuild=_env_bool(
+            "PYSTAMPS_GACOS_REBUILD",
+            False,
+        ),
         incidence_tif=incidence_tif,
         incidence_deg=incidence_deg,
-        qa_ps=max(1000, int(os.environ.get("PYSTAMPS_GACOS_QA_PS", "30000"))),
-        qa_ifg=max(10, int(os.environ.get("PYSTAMPS_GACOS_QA_IFG", "80"))),
-        chunk_ps=max(256, int(os.environ.get("PYSTAMPS_GACOS_CHUNK_PS", "4096"))),
+        qa_ps=max(
+            1000,
+            int(
+                os.environ.get(
+                    "PYSTAMPS_GACOS_QA_PS",
+                    "30000",
+                )
+            ),
+        ),
+        qa_ifg=max(
+            10,
+            int(
+                os.environ.get(
+                    "PYSTAMPS_GACOS_QA_IFG",
+                    "80",
+                )
+            ),
+        ),
+        chunk_ps=max(
+            256,
+            int(
+                os.environ.get(
+                    "PYSTAMPS_GACOS_CHUNK_PS",
+                    "4096",
+                )
+            ),
+        ),
         min_valid_fraction=float(
-            os.environ.get("PYSTAMPS_GACOS_MIN_VALID_FRACTION", "0.995")
+            os.environ.get(
+                "PYSTAMPS_GACOS_MIN_VALID_FRACTION",
+                "0.995",
+            )
         ),
     )
 
@@ -189,7 +417,9 @@ def _find_rsc(ztd_path: Path) -> Path | None:
     return None
 
 
-def discover_products(gacos_dir: Path, product_format: str) -> dict[str, GacosProduct]:
+def discover_products(
+    gacos_dir: Path,
+) -> dict[str, GacosProduct]:
     tif_by_date: dict[str, list[Path]] = {}
     ztd_by_date: dict[str, list[tuple[Path, Path]]] = {}
 
@@ -210,11 +440,13 @@ def discover_products(gacos_dir: Path, product_format: str) -> dict[str, GacosPr
     products: dict[str, GacosProduct] = {}
     dates = sorted(set(tif_by_date) | set(ztd_by_date))
     for date in dates:
-        if product_format in {"auto", "tif"} and date in tif_by_date:
+        # Deterministic priority when both representations
+        # exist for the same acquisition: GeoTIFF first.
+        if date in tif_by_date:
             choices = sorted(tif_by_date[date], key=lambda p: (len(str(p)), str(p)))
             products[date] = GacosProduct(date=date, path=choices[0], kind="tif")
             continue
-        if product_format in {"auto", "ztd"} and date in ztd_by_date:
+        if date in ztd_by_date:
             choices = sorted(ztd_by_date[date], key=lambda item: (len(str(item[0])), str(item[0])))
             ztd, rsc = choices[0]
             products[date] = GacosProduct(date=date, path=ztd, kind="ztd", rsc_path=rsc)
@@ -361,10 +593,66 @@ def _sample_ztd(product: GacosProduct, lon: np.ndarray, lat: np.ndarray, unit: s
         raise GacosCorrectionError(
             f"GACOS ZTD byte size mismatch for {product.path}: {actual}, expected {expected}"
         )
-    grid = np.memmap(product.path, dtype=dtype, mode="r", shape=(length, width))
-    row = (lat - y_first) / y_step
-    col = (lon - x_first) / x_step
-    sampled = _sample_normalized(grid, row, col)
+    grid = np.memmap(
+        product.path,
+        dtype=dtype,
+        mode="r",
+        shape=(length, width),
+    )
+
+    row = (
+        np.asarray(lat, dtype=np.float64)
+        - y_first
+    ) / y_step
+
+    col = (
+        np.asarray(lon, dtype=np.float64)
+        - x_first
+    ) / x_step
+
+    # Floating-point arithmetic can move an exact boundary
+    # coordinate a few ulps outside the valid grid, e.g.
+    # 2.0 -> 2.00000000000003. Snap only coordinates that are
+    # within a tiny tolerance of the raster boundary. Truly
+    # out-of-coverage coordinates remain outside and therefore
+    # still return NaN.
+    boundary_tol = 1.0e-7
+
+    row_near = (
+        (row >= -boundary_tol)
+        & (row <= (length - 1) + boundary_tol)
+    )
+
+    col_near = (
+        (col >= -boundary_tol)
+        & (col <= (width - 1) + boundary_tol)
+    )
+
+    row = np.where(
+        row_near,
+        np.clip(
+            row,
+            0.0,
+            float(length - 1),
+        ),
+        row,
+    )
+
+    col = np.where(
+        col_near,
+        np.clip(
+            col,
+            0.0,
+            float(width - 1),
+        ),
+        col,
+    )
+
+    sampled = _sample_normalized(
+        grid,
+        row,
+        col,
+    )
     scale = _forced_unit_scale(unit)
     if scale is None:
         scale = 1.0
@@ -398,7 +686,7 @@ def _incidence_from_tif(path: Path, lon: np.ndarray, lat: np.ndarray) -> np.ndar
 
 
 def _resolve_incidence(
-    config: GacosConfig,
+    config: ResolvedGacosConfig,
     ps2: dict[str, Any],
     parms: dict[str, Any],
     lon: np.ndarray,
@@ -482,125 +770,442 @@ def _robust_scale(values: np.ndarray, axis: int = 0) -> np.ndarray:
     return 1.4826 * np.nanmedian(np.abs(values - median), axis=axis)
 
 
+
 def _choose_sign(
-    ph_ifg: np.ndarray,
+    ph_sm: np.ndarray,
     los_delay: np.memmap,
-    ifgday_ix: np.ndarray,
+    master0: int,
     wavelength_m: float,
-    config: GacosConfig,
+    config: ResolvedGacosConfig,
 ) -> tuple[str, dict[str, float]]:
-    if config.sign in {"subtract", "add"}:
-        return config.sign, {"selection": "forced"}
 
-    n_ps, n_ifg = ph_ifg.shape
-    ps_ix = np.linspace(0, n_ps - 1, min(config.qa_ps, n_ps), dtype=np.int64)
-    ifg_ix = np.linspace(0, n_ifg - 1, min(config.qa_ifg, n_ifg), dtype=np.int64)
-    phase_scale = 4.0 * math.pi / wavelength_m
+    if config.sign in {
+        "subtract",
+        "add",
+    }:
+        return config.sign, {
+            "selection": "forced"
+        }
 
-    scores_raw: list[float] = []
-    scores_subtract: list[float] = []
-    scores_add: list[float] = []
-    correlations: list[float] = []
+    n_ps, n_image = ph_sm.shape
 
-    for j in ifg_ix:
-        early = int(ifgday_ix[j, 0] - 1)
-        late = int(ifgday_ix[j, 1] - 1)
-        atmospheric = phase_scale * (
-            np.asarray(los_delay[ps_ix, late], dtype=np.float64)
-            - np.asarray(los_delay[ps_ix, early], dtype=np.float64)
+    ps_ix = np.linspace(
+        0,
+        n_ps - 1,
+        min(config.qa_ps, n_ps),
+        dtype=np.int64,
+    )
+
+    image_pool = np.setdiff1d(
+        np.arange(
+            n_image,
+            dtype=np.int64,
+        ),
+        np.asarray(
+            [master0],
+            dtype=np.int64,
+        ),
+    )
+
+    if image_pool.size == 0:
+        raise GacosCorrectionError(
+            "No non-master acquisitions "
+            "available for GACOS sign QA"
         )
-        raw = np.asarray(ph_ifg[ps_ix, j], dtype=np.float64)
-        valid = np.isfinite(raw) & np.isfinite(atmospheric)
+
+    image_ix = image_pool[
+        np.linspace(
+            0,
+            image_pool.size - 1,
+            min(
+                config.qa_ifg,
+                image_pool.size,
+            ),
+            dtype=np.int64,
+        )
+    ]
+
+    phase_scale = (
+        4.0
+        * math.pi
+        / wavelength_m
+    )
+
+    scores_raw = []
+    scores_subtract = []
+    scores_add = []
+    correlations = []
+
+    master_delay = np.asarray(
+        los_delay[
+            ps_ix,
+            master0,
+        ],
+        dtype=np.float64,
+    )
+
+    for j in image_ix:
+
+        atmospheric = (
+            phase_scale
+            * (
+                np.asarray(
+                    los_delay[
+                        ps_ix,
+                        j,
+                    ],
+                    dtype=np.float64,
+                )
+                - master_delay
+            )
+        )
+
+        raw = np.asarray(
+            ph_sm[
+                ps_ix,
+                j,
+            ],
+            dtype=np.float64,
+        )
+
+        valid = (
+            np.isfinite(raw)
+            & np.isfinite(atmospheric)
+        )
+
         if np.count_nonzero(valid) < 100:
             continue
-        r = raw[valid]
-        a = atmospheric[valid]
+
+        r = raw[valid].copy()
+        a = atmospheric[valid].copy()
+
         r -= np.nanmedian(r)
         a -= np.nanmedian(a)
-        scores_raw.append(float(_robust_scale(r, axis=0)))
-        scores_subtract.append(float(_robust_scale(r - a, axis=0)))
-        scores_add.append(float(_robust_scale(r + a, axis=0)))
-        if np.nanstd(r) > 0 and np.nanstd(a) > 0:
-            correlations.append(float(np.corrcoef(r, a)[0, 1]))
+
+        scores_raw.append(
+            float(
+                _robust_scale(
+                    r,
+                    axis=0,
+                )
+            )
+        )
+
+        scores_subtract.append(
+            float(
+                _robust_scale(
+                    r - a,
+                    axis=0,
+                )
+            )
+        )
+
+        scores_add.append(
+            float(
+                _robust_scale(
+                    r + a,
+                    axis=0,
+                )
+            )
+        )
+
+        if (
+            np.nanstd(r) > 0
+            and np.nanstd(a) > 0
+        ):
+            correlations.append(
+                float(
+                    np.corrcoef(
+                        r,
+                        a,
+                    )[0, 1]
+                )
+            )
 
     if not scores_subtract:
-        raise GacosCorrectionError("Unable to determine GACOS correction sign from valid QA samples")
+        raise GacosCorrectionError(
+            "Unable to determine GACOS sign "
+            "from valid single-master samples"
+        )
 
-    raw_score = float(np.nanmedian(scores_raw))
-    subtract_score = float(np.nanmedian(scores_subtract))
-    add_score = float(np.nanmedian(scores_add))
-    chosen = "subtract" if subtract_score <= add_score else "add"
-    best_score = min(subtract_score, add_score)
-    improvement = 100.0 * (raw_score - best_score) / raw_score if raw_score > 0 else 0.0
+    raw_score = float(
+        np.nanmedian(
+            scores_raw
+        )
+    )
+
+    subtract_score = float(
+        np.nanmedian(
+            scores_subtract
+        )
+    )
+
+    add_score = float(
+        np.nanmedian(
+            scores_add
+        )
+    )
+
+    chosen = (
+        "subtract"
+        if subtract_score <= add_score
+        else "add"
+    )
+
+    best_score = min(
+        subtract_score,
+        add_score,
+    )
+
+    improvement = (
+        100.0
+        * (
+            raw_score
+            - best_score
+        )
+        / raw_score
+        if raw_score > 0
+        else 0.0
+    )
+
     return chosen, {
-        "selection": "auto_robust_spatial_scale",
-        "raw_score_rad": raw_score,
-        "subtract_score_rad": subtract_score,
-        "add_score_rad": add_score,
-        "chosen_improvement_percent": improvement,
-        "median_raw_atmosphere_correlation": float(np.nanmedian(correlations)) if correlations else float("nan"),
-        "qa_ifg_count": len(scores_subtract),
-        "qa_ps_count": int(ps_ix.size),
+        "selection":
+            "auto_single_master_robust_spatial_scale",
+        "raw_score_rad":
+            raw_score,
+        "subtract_score_rad":
+            subtract_score,
+        "add_score_rad":
+            add_score,
+        "chosen_improvement_percent":
+            improvement,
+        "median_raw_atmosphere_correlation":
+            (
+                float(
+                    np.nanmedian(
+                        correlations
+                    )
+                )
+                if correlations
+                else float("nan")
+            ),
+        "qa_image_count":
+            len(scores_subtract),
+        "qa_ps_count":
+            int(ps_ix.size),
     }
+
 
 
 def _write_hdf5_mat(
     path: Path,
     raw_phase: np.ndarray,
     msd: np.ndarray,
+    unwrap_ifg_index_sm: Any,
     los_delay: np.memmap,
-    ifgday_ix: np.ndarray,
+    master0: int,
     wavelength_m: float,
     sign: str,
     chunk_ps: int,
 ) -> None:
+
     try:
         import h5py
     except Exception as exc:
-        raise GacosCorrectionError("Writing phuw2_gacos.mat requires h5py") from exc
+        raise GacosCorrectionError(
+            "Writing phuw2_gacos.mat "
+            "requires h5py"
+        ) from exc
 
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(
+        path.suffix + ".tmp"
+    )
+
     if tmp.exists():
         tmp.unlink()
-    n_ps, n_ifg = raw_phase.shape
-    phase_scale = 4.0 * math.pi / wavelength_m
-    sign_factor = -1.0 if sign == "subtract" else 1.0
 
-    with h5py.File(tmp, "w") as h5:
+    n_ps, n_image = raw_phase.shape
+
+    phase_scale = (
+        4.0
+        * math.pi
+        / wavelength_m
+    )
+
+    sign_factor = (
+        -1.0
+        if sign == "subtract"
+        else 1.0
+    )
+
+    with h5py.File(
+        tmp,
+        "w",
+    ) as h5:
+
         dset = h5.create_dataset(
             "ph_uw",
-            shape=(n_ps, n_ifg),
+            shape=(
+                n_ps,
+                n_image,
+            ),
             dtype=np.float32,
-            chunks=(min(chunk_ps, n_ps), min(32, n_ifg)),
+            chunks=(
+                min(
+                    chunk_ps,
+                    n_ps,
+                ),
+                min(
+                    32,
+                    n_image,
+                ),
+            ),
             compression="gzip",
             compression_opts=1,
             shuffle=True,
         )
-        dset.attrs["PY_STAMPS_row_major"] = np.asarray(1, dtype=np.uint8)
-        for start in range(0, n_ps, chunk_ps):
-            stop = min(start + chunk_ps, n_ps)
-            early = ifgday_ix[:, 0].astype(np.int64) - 1
-            late = ifgday_ix[:, 1].astype(np.int64) - 1
-            atmospheric = phase_scale * (
-                np.asarray(los_delay[start:stop, :][:, late], dtype=np.float64)
-                - np.asarray(los_delay[start:stop, :][:, early], dtype=np.float64)
+
+        dset.attrs[
+            "PY_STAMPS_row_major"
+        ] = np.asarray(
+            1,
+            dtype=np.uint8,
+        )
+
+        for start in range(
+            0,
+            n_ps,
+            chunk_ps,
+        ):
+
+            stop = min(
+                start + chunk_ps,
+                n_ps,
             )
-            corrected = np.asarray(raw_phase[start:stop, :], dtype=np.float64)
-            corrected += sign_factor * atmospheric
-            dset[start:stop, :] = corrected.astype(np.float32)
+
+            delay = np.asarray(
+                los_delay[
+                    start:stop,
+                    :,
+                ],
+                dtype=np.float64,
+            )
+
+            atmospheric = (
+                phase_scale
+                * (
+                    delay
+                    - delay[
+                        :,
+                        master0,
+                    ][:, None]
+                )
+            )
+
+            corrected = np.asarray(
+                raw_phase[
+                    start:stop,
+                    :,
+                ],
+                dtype=np.float64,
+            )
+
+            corrected += (
+                sign_factor
+                * atmospheric
+            )
+
+            dset[
+                start:stop,
+                :,
+            ] = corrected.astype(
+                np.float32
+            )
+
             print(
-                f"[GACOS][WRITE] {stop}/{n_ps} ({100.0 * stop / n_ps:.1f}%)",
+                "[GACOS][WRITE] "
+                f"{stop}/{n_ps} "
+                f"({100.0*stop/n_ps:.1f}%)",
                 flush=True,
             )
 
-        msd_arr = np.asarray(msd, dtype=np.float32).reshape(-1, 1)
-        msd_dset = h5.create_dataset("msd", data=msd_arr)
-        msd_dset.attrs["PY_STAMPS_row_major"] = np.asarray(1, dtype=np.uint8)
-        h5.attrs["gacos_corrected"] = np.asarray(1, dtype=np.uint8)
-        h5.attrs["gacos_sign"] = sign
-        h5.attrs["wavelength_m"] = float(wavelength_m)
+        msd_arr = np.asarray(
+            msd,
+            dtype=np.float32,
+        ).reshape(
+            -1,
+            1,
+        )
 
-    os.replace(tmp, path)
+        msd_dset = h5.create_dataset(
+            "msd",
+            data=msd_arr,
+        )
+
+        msd_dset.attrs[
+            "PY_STAMPS_row_major"
+        ] = np.asarray(
+            1,
+            dtype=np.uint8,
+        )
+
+        if (
+            unwrap_ifg_index_sm is not None
+            and np.asarray(
+                unwrap_ifg_index_sm
+            ).size
+        ):
+            unwrap_arr = np.asarray(
+                unwrap_ifg_index_sm,
+                dtype=np.int64,
+            ).reshape(
+                -1,
+                1,
+            )
+
+            unwrap_dset = (
+                h5.create_dataset(
+                    "unwrap_ifg_index_sm",
+                    data=unwrap_arr,
+                )
+            )
+
+            unwrap_dset.attrs[
+                "PY_STAMPS_row_major"
+            ] = np.asarray(
+                1,
+                dtype=np.uint8,
+            )
+
+        h5.attrs[
+            "gacos_corrected"
+        ] = np.asarray(
+            1,
+            dtype=np.uint8,
+        )
+
+        h5.attrs[
+            "gacos_sign"
+        ] = sign
+
+        h5.attrs[
+            "gacos_reference_mode"
+        ] = "single_master"
+
+        h5.attrs[
+            "gacos_master_index_1based"
+        ] = int(master0 + 1)
+
+        h5.attrs[
+            "wavelength_m"
+        ] = float(
+            wavelength_m
+        )
+
+    os.replace(
+        tmp,
+        path,
+    )
 
 
 def _write_inventory_csv(
@@ -630,204 +1235,780 @@ def _write_inventory_csv(
             )
 
 
-def ensure_gacos_corrected_phuw(dataset_root: Path) -> Path:
-    """Create or reuse phuw2_gacos.mat and return its path."""
 
-    root = Path(dataset_root).expanduser().resolve()
-    config = _load_config(root)
-    output = root / "phuw2_gacos.mat"
-    debug_path = root / "gacos_correction_debug.json"
-    inventory_csv = root / "gacos_date_inventory.csv"
-    work_dir = root / "_gacos_work"
-    work_dir.mkdir(parents=True, exist_ok=True)
+def ensure_gacos_corrected_phuw(
+    dataset_root: Path,
+    settings: PipelineGacosConfig | None = None,
+) -> Path:
+    """
+    Create/reuse phuw2_gacos.mat.
 
-    required = ("ps2.mat", "phuw2.mat", "parms.mat")
-    missing = [name for name in required if not (root / name).exists()]
+    phuw2 is a SINGLE-MASTER phase matrix:
+        shape = n_ps x n_image
+
+    GACOS correction for acquisition i is referenced
+    to the same master acquisition:
+        atm_i = 4*pi/lambda * (LOS_i - LOS_master)
+    """
+
+    root = (
+        Path(dataset_root)
+        .expanduser()
+        .resolve()
+    )
+
+    config = _load_config(
+        root,
+        settings,
+    )
+
+    output = (
+        root
+        / "phuw2_gacos.mat"
+    )
+
+    debug_path = (
+        root
+        / "gacos_correction_debug.json"
+    )
+
+    inventory_csv = (
+        root
+        / "gacos_date_inventory.csv"
+    )
+
+    work_dir = (
+        root
+        / "_gacos_work"
+    )
+
+    work_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    required = (
+        "ps2.mat",
+        "phuw2.mat",
+        "parms.mat",
+    )
+
+    missing = [
+        name
+        for name in required
+        if not (
+            root / name
+        ).exists()
+    ]
+
     if missing:
-        raise GacosCorrectionError(f"Missing GACOS correction inputs: {', '.join(missing)}")
+        raise GacosCorrectionError(
+            "Missing GACOS correction inputs: "
+            + ", ".join(missing)
+        )
 
-    ps2 = read_mat(root / "ps2.mat")
-    n_ps = int(round(_scalar(ps2.get("n_ps"), 0)))
+    # ========================================================
+    # StaMPS geometry
+    # ========================================================
+
+    ps2 = read_mat(
+        root / "ps2.mat"
+    )
+
+    n_ps = int(
+        round(
+            _scalar(
+                ps2.get("n_ps"),
+                0,
+            )
+        )
+    )
+
+    n_image = int(
+        round(
+            _scalar(
+                ps2.get("n_image"),
+                0,
+            )
+        )
+    )
+
+    n_ifg = int(
+        round(
+            _scalar(
+                ps2.get("n_ifg"),
+                0,
+            )
+        )
+    )
+
+    master_ix = int(
+        round(
+            _scalar(
+                ps2.get("master_ix"),
+                1,
+            )
+        )
+    )
+
     if n_ps <= 0:
-        raise GacosCorrectionError("ps2.mat contains invalid n_ps")
-    lonlat = _as_matrix(ps2.get("lonlat"), n_ps, "ps2.lonlat", np.float64)
+        raise GacosCorrectionError(
+            "ps2.mat contains invalid n_ps"
+        )
+
+    if n_image <= 1:
+        raise GacosCorrectionError(
+            "ps2.mat contains invalid n_image"
+        )
+
+    if not (
+        1 <= master_ix <= n_image
+    ):
+        raise GacosCorrectionError(
+            "ps2.mat contains invalid master_ix"
+        )
+
+    master0 = (
+        master_ix - 1
+    )
+
+    day = np.asarray(
+        ps2.get("day"),
+        dtype=np.float64,
+    ).reshape(-1)
+
+    if day.size != n_image:
+        raise GacosCorrectionError(
+            f"ps2.day length {day.size} "
+            f"!= n_image {n_image}"
+        )
+
+    dates = _day_labels(
+        day
+    )
+
+    lonlat = _as_matrix(
+        ps2.get("lonlat"),
+        n_ps,
+        "ps2.lonlat",
+        np.float64,
+    )
+
     lon = lonlat[:, 0]
     lat = lonlat[:, 1]
 
-    phuw = read_mat_variables(root / "phuw2.mat", ("ph_uw", "msd"))
-    ph_ifg = _as_matrix(phuw["ph_uw"], n_ps, "phuw2.ph_uw", np.float32)
-    n_ps, n_ifg = ph_ifg.shape
-    msd = np.asarray(phuw.get("msd", np.zeros(n_ifg)), dtype=np.float32).reshape(-1)
-    if msd.size != n_ifg:
-        msd = np.zeros(n_ifg, dtype=np.float32)
+    # ========================================================
+    # phuw2 = n_ps x n_image
+    # ========================================================
 
-    day, ifgday_ix, _bperp, network_source = load_sbas_network(root, n_ifg)
-    dates = _day_labels(day)
-    ifgday_ix = np.asarray(ifgday_ix, dtype=np.int64)
-    n_image = len(dates)
+    phuw = read_mat_variables(
+        root / "phuw2.mat",
+        (
+            "ph_uw",
+            "msd",
+            "unwrap_ifg_index_sm",
+        ),
+    )
 
-    products = discover_products(config.gacos_dir, config.product_format)
-    missing_dates = [date for date in dates if date not in products]
-    if missing_dates:
-        preview = ", ".join(missing_dates[:20])
+    ph_sm = _as_matrix(
+        phuw["ph_uw"],
+        n_ps,
+        "phuw2.ph_uw",
+        np.float32,
+    )
+
+    if ph_sm.shape != (
+        n_ps,
+        n_image,
+    ):
         raise GacosCorrectionError(
-            f"Missing {len(missing_dates)}/{n_image} GACOS acquisition dates: {preview}. "
-            "All acquisition dates are required; temporal interpolation is intentionally not used."
+            "phuw2.ph_uw must be "
+            "n_ps x n_image; "
+            f"got {ph_sm.shape}, "
+            f"expected ({n_ps}, {n_image})"
         )
 
-    fingerprint = _inventory_fingerprint(products, dates)
-    source_stat = (root / "phuw2.mat").stat()
+    msd = np.asarray(
+        phuw.get(
+            "msd",
+            np.zeros(
+                n_image,
+                dtype=np.float32,
+            ),
+        ),
+        dtype=np.float32,
+    ).reshape(-1)
+
+    if msd.size != n_image:
+        msd = np.zeros(
+            n_image,
+            dtype=np.float32,
+        )
+
+    unwrap_ifg_index_sm = (
+        phuw.get(
+            "unwrap_ifg_index_sm"
+        )
+    )
+
+    # ========================================================
+    # GACOS inventory
+    # ========================================================
+
+    products = discover_products(
+        config.gacos_dir
+    )
+
+    missing_dates = [
+        date
+        for date in dates
+        if date not in products
+    ]
+
+    if missing_dates:
+
+        preview = ", ".join(
+            missing_dates[:20]
+        )
+
+        if not config.strict_dates:
+            raise GacosCorrectionError(
+                "gacos.strict_dates=false "
+                "does not enable temporal "
+                "interpolation or partial "
+                "correction. "
+                f"Missing "
+                f"{len(missing_dates)}/{n_image} "
+                f"dates: {preview}"
+            )
+
+        raise GacosCorrectionError(
+            f"Missing "
+            f"{len(missing_dates)}/{n_image} "
+            f"GACOS acquisition dates: "
+            f"{preview}"
+        )
+
+    fingerprint = (
+        _inventory_fingerprint(
+            products,
+            dates,
+        )
+    )
+
+    source_stat = (
+        root
+        / "phuw2.mat"
+    ).stat()
+
     cache_signature = {
-        "phuw2_size": source_stat.st_size,
-        "phuw2_mtime_ns": source_stat.st_mtime_ns,
-        "inventory_fingerprint": fingerprint,
-        "format": config.product_format,
-        "unit": config.product_unit,
-        "projection": config.projection,
-        "min_valid_fraction": config.min_valid_fraction,
-        "sign_requested": config.sign,
-        "incidence_tif": str(config.incidence_tif) if config.incidence_tif else None,
-        "incidence_deg": config.incidence_deg,
+        "phase_mode":
+            "single_master",
+        "phuw2_size":
+            source_stat.st_size,
+        "phuw2_mtime_ns":
+            source_stat.st_mtime_ns,
+        "inventory_fingerprint":
+            fingerprint,
+        "unit":
+            config.product_unit,
+        "projection":
+            config.projection,
+        "min_valid_fraction":
+            config.min_valid_fraction,
+        "sign_requested":
+            config.sign,
+        "incidence_tif":
+            (
+                str(config.incidence_tif)
+                if config.incidence_tif
+                else None
+            ),
+        "incidence_deg":
+            config.incidence_deg,
+        "master_ix":
+            master_ix,
+        "n_image":
+            n_image,
     }
 
-    if output.exists() and debug_path.exists() and not config.rebuild:
+    if (
+        output.exists()
+        and debug_path.exists()
+        and not config.rebuild
+    ):
         try:
-            existing = json.loads(debug_path.read_text(encoding="utf-8"))
-            if existing.get("status") == "completed" and existing.get("cache_signature") == cache_signature:
-                print(f"[GACOS] Reusing completed correction: {output}", flush=True)
+            existing = json.loads(
+                debug_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if (
+                existing.get("status")
+                == "completed"
+                and existing.get(
+                    "cache_signature"
+                )
+                == cache_signature
+            ):
+                print(
+                    "[GACOS] Reusing "
+                    f"completed correction: "
+                    f"{output}",
+                    flush=True,
+                )
                 return output
         except Exception:
             pass
 
-    started = time.perf_counter()
-    parms = read_mat(root / "parms.mat")
-    wavelength_m = _scalar(parms.get("lambda"), 0.0555)
-    if not (0.001 < wavelength_m < 1.0):
-        raise GacosCorrectionError(f"Invalid radar wavelength: {wavelength_m}")
+    started = (
+        time.perf_counter()
+    )
 
-    incidence, incidence_source = _resolve_incidence(config, ps2, parms, lon, lat)
-    if config.projection == "zenith":
-        cosine = np.cos(incidence)
-        if np.any(~np.isfinite(cosine)) or np.nanmin(cosine) <= 0.05:
-            raise GacosCorrectionError("Invalid incidence angles for zenith-to-LOS projection")
+    parms = read_mat(
+        root / "parms.mat"
+    )
+
+    wavelength_m = _scalar(
+        parms.get("lambda"),
+        0.0555,
+    )
+
+    if not (
+        0.001
+        < wavelength_m
+        < 1.0
+    ):
+        raise GacosCorrectionError(
+            "Invalid radar wavelength: "
+            f"{wavelength_m}"
+        )
+
+    incidence, incidence_source = (
+        _resolve_incidence(
+            config,
+            ps2,
+            parms,
+            lon,
+            lat,
+        )
+    )
+
+    if (
+        config.projection
+        == "zenith"
+    ):
+        cosine = np.cos(
+            incidence
+        )
+
+        if (
+            np.any(
+                ~np.isfinite(
+                    cosine
+                )
+            )
+            or np.nanmin(
+                cosine
+            )
+            <= 0.05
+        ):
+            raise GacosCorrectionError(
+                "Invalid incidence angles "
+                "for zenith-to-LOS "
+                "projection"
+            )
+
     else:
-        cosine = np.ones(n_ps, dtype=np.float64)
+        cosine = np.ones(
+            n_ps,
+            dtype=np.float64,
+        )
 
-    ref_ix, reference_source = _reference_indices(ps2, parms, n_ps)
-    delay_path = work_dir / "gacos_los_ref.f32"
-    los_delay = np.memmap(delay_path, dtype=np.float32, mode="w+", shape=(n_ps, n_image))
+    ref_ix, reference_source = (
+        _reference_indices(
+            ps2,
+            parms,
+            n_ps,
+        )
+    )
+
+    # Delay per PS per acquisition.
+    delay_path = (
+        work_dir
+        / "gacos_los_ref.f32"
+    )
+
+    los_delay = np.memmap(
+        delay_path,
+        dtype=np.float32,
+        mode="w+",
+        shape=(
+            n_ps,
+            n_image,
+        ),
+    )
+
     los_delay[:] = np.nan
     los_delay.flush()
 
-    valid_counts: dict[str, int] = {}
-    metadata_by_kind: dict[str, dict[str, Any]] = {}
-    for index, date in enumerate(dates):
-        product = products.get(date)
-        if product is None:
-            continue
-        sampled, meta = sample_product(product, lon, lat, config.product_unit)
-        metadata_by_kind.setdefault(product.kind, meta)
-        los = sampled / cosine
-        finite_los = np.isfinite(los)
-        valid_fraction = float(np.count_nonzero(finite_los) / n_ps)
-        if valid_fraction < config.min_valid_fraction:
-            raise GacosCorrectionError(
-                f"GACOS coverage for {date} is only {100.0 * valid_fraction:.2f}% "
-                f"(< {100.0 * config.min_valid_fraction:.2f}%)"
-            )
-        if not np.all(finite_los):
-            from scipy.spatial import cKDTree
+    valid_counts = {}
+    metadata_by_kind = {}
 
-            valid_ix = np.flatnonzero(finite_los)
-            missing_ix = np.flatnonzero(~finite_los)
-            cos_lat = math.cos(math.radians(float(np.nanmedian(lat))))
-            xy = np.column_stack((lon * cos_lat, lat))
-            tree = cKDTree(xy[valid_ix, :])
-            _distance, nearest = tree.query(xy[missing_ix, :], k=1)
-            los[missing_ix] = los[valid_ix[np.asarray(nearest, dtype=np.int64)]]
+    for index, date in enumerate(
+        dates
+    ):
 
-        valid_ref = ref_ix[np.isfinite(los[ref_ix])]
-        if valid_ref.size == 0:
-            raise GacosCorrectionError(
-                f"No finite GACOS values in reference region for {date}"
+        product = products[date]
+
+        sampled, meta = (
+            sample_product(
+                product,
+                lon,
+                lat,
+                config.product_unit,
             )
-        reference_value = float(np.nanmedian(los[valid_ref]))
+        )
+
+        metadata_by_kind.setdefault(
+            product.kind,
+            meta,
+        )
+
+        los = (
+            sampled
+            / cosine
+        )
+
+        finite_los = (
+            np.isfinite(los)
+        )
+
+        valid_fraction = float(
+            np.count_nonzero(
+                finite_los
+            )
+            / n_ps
+        )
+
+        if (
+            valid_fraction
+            < config.min_valid_fraction
+        ):
+            raise GacosCorrectionError(
+                f"GACOS coverage for "
+                f"{date} is only "
+                f"{100*valid_fraction:.2f}% "
+                f"(< "
+                f"{100*config.min_valid_fraction:.2f}%)"
+            )
+
+        if not np.all(
+            finite_los
+        ):
+            from scipy.spatial import (
+                cKDTree,
+            )
+
+            valid_ix = np.flatnonzero(
+                finite_los
+            )
+
+            missing_ix = np.flatnonzero(
+                ~finite_los
+            )
+
+            cos_lat = math.cos(
+                math.radians(
+                    float(
+                        np.nanmedian(
+                            lat
+                        )
+                    )
+                )
+            )
+
+            xy = np.column_stack(
+                (
+                    lon * cos_lat,
+                    lat,
+                )
+            )
+
+            tree = cKDTree(
+                xy[
+                    valid_ix,
+                    :,
+                ]
+            )
+
+            _distance, nearest = (
+                tree.query(
+                    xy[
+                        missing_ix,
+                        :,
+                    ],
+                    k=1,
+                )
+            )
+
+            los[
+                missing_ix
+            ] = los[
+                valid_ix[
+                    np.asarray(
+                        nearest,
+                        dtype=np.int64,
+                    )
+                ]
+            ]
+
+        valid_ref = ref_ix[
+            np.isfinite(
+                los[ref_ix]
+            )
+        ]
+
+        if (
+            valid_ref.size
+            == 0
+        ):
+            raise GacosCorrectionError(
+                "No finite GACOS values "
+                "in reference region "
+                f"for {date}"
+            )
+
+        reference_value = float(
+            np.nanmedian(
+                los[
+                    valid_ref
+                ]
+            )
+        )
+
+        # Same spatial reference as InSAR.
         los -= reference_value
-        los_delay[:, index] = los.astype(np.float32)
+
+        los_delay[
+            :,
+            index,
+        ] = los.astype(
+            np.float32
+        )
+
         los_delay.flush()
-        valid_counts[date] = int(np.count_nonzero(np.isfinite(sampled)))
+
+        valid_counts[date] = int(
+            np.count_nonzero(
+                np.isfinite(
+                    sampled
+                )
+            )
+        )
+
         print(
-            f"[GACOS][SAMPLE] {index + 1}/{n_image} {date} "
-            f"kind={product.kind} valid={valid_counts[date]}/{n_ps}",
+            "[GACOS][SAMPLE] "
+            f"{index+1}/{n_image} "
+            f"{date} "
+            f"kind={product.kind} "
+            f"valid="
+            f"{valid_counts[date]}/{n_ps}",
             flush=True,
         )
 
-    _write_inventory_csv(inventory_csv, dates, products, valid_counts)
+    _write_inventory_csv(
+        inventory_csv,
+        dates,
+        products,
+        valid_counts,
+    )
 
-    valid_date_columns = np.all(np.isfinite(los_delay), axis=0)
-    if not np.all(valid_date_columns):
-        bad = [dates[i] for i in np.flatnonzero(~valid_date_columns)]
+    valid_date_columns = np.all(
+        np.isfinite(
+            los_delay
+        ),
+        axis=0,
+    )
+
+    if not np.all(
+        valid_date_columns
+    ):
+        bad = [
+            dates[i]
+            for i
+            in np.flatnonzero(
+                ~valid_date_columns
+            )
+        ]
+
         raise GacosCorrectionError(
-            f"GACOS PS sampling is incomplete for {len(bad)} dates; first: {bad[:10]}"
+            "GACOS PS sampling "
+            f"incomplete for "
+            f"{len(bad)} dates; "
+            f"first: {bad[:10]}"
         )
 
+    # ========================================================
+    # Sign selection from single-master phase
+    # ========================================================
+
     sign, qa = _choose_sign(
-        ph_ifg,
+        ph_sm,
         los_delay,
-        ifgday_ix,
+        master0,
         wavelength_m,
         config,
     )
-    print(f"[GACOS] correction sign: {sign}; QA={qa}", flush=True)
+
+    print(
+        "[GACOS] correction sign: "
+        f"{sign}; QA={qa}",
+        flush=True,
+    )
 
     _write_hdf5_mat(
         output,
-        ph_ifg,
+        ph_sm,
         msd,
+        unwrap_ifg_index_sm,
         los_delay,
-        ifgday_ix,
+        master0,
         wavelength_m,
         sign,
         config.chunk_ps,
     )
 
-    debug = {
-        "status": "completed",
-        "dataset_root": str(root),
-        "gacos_dir": str(config.gacos_dir),
-        "output": str(output),
-        "source_phuw": str(root / "phuw2.mat"),
-        "network_source": str(network_source),
-        "n_ps": n_ps,
-        "n_ifg": n_ifg,
-        "n_image": n_image,
-        "dates_start": dates[0],
-        "dates_end": dates[-1],
-        "product_format_requested": config.product_format,
-        "product_kind_counts": {
-            "tif": sum(1 for date in dates if date in products and products[date].kind == "tif"),
-            "ztd": sum(1 for date in dates if date in products and products[date].kind == "ztd"),
-        },
-        "missing_dates": missing_dates,
-        "product_unit_requested": config.product_unit,
-        "min_valid_fraction": config.min_valid_fraction,
-        "projection": config.projection,
-        "incidence_source": incidence_source,
-        "incidence_deg_median": float(np.nanmedian(np.rad2deg(incidence))) if config.projection == "zenith" else None,
-        "reference_source": reference_source,
-        "reference_ps": int(ref_ix.size),
-        "correction_sign": sign,
-        "sign_qa": qa,
-        "wavelength_m": wavelength_m,
-        "cache_signature": cache_signature,
-        "sample_metadata": metadata_by_kind,
-        "work_delay_file": str(delay_path),
-        "inventory_csv": str(inventory_csv),
-        "duration_sec": time.perf_counter() - started,
-        "phase_formula": "ph_corr = ph_raw - atm_phase for subtract; ph_raw + atm_phase for add",
-        "atm_phase_formula": "4*pi/lambda * ((LOS_late-ref_late) - (LOS_early-ref_early))",
-        "note": "GACOS applied after Stage 6 and before custom SBAS Stage 7/8; original phuw2.mat is preserved.",
+    kind_counts = {
+        "tif": sum(
+            1
+            for date in dates
+            if products[
+                date
+            ].kind
+            == "tif"
+        ),
+        "ztd": sum(
+            1
+            for date in dates
+            if products[
+                date
+            ].kind
+            == "ztd"
+        ),
     }
-    _write_json(debug_path, debug)
-    print(f"[GACOS] completed: {output}", flush=True)
+
+    debug = {
+        "status":
+            "completed",
+        "dataset_root":
+            str(root),
+        "gacos_dir":
+            str(
+                config.gacos_dir
+            ),
+        "output":
+            str(output),
+        "source_phuw":
+            str(
+                root
+                / "phuw2.mat"
+            ),
+        "phase_mode":
+            "single_master",
+        "n_ps":
+            n_ps,
+        "n_ifg":
+            n_ifg,
+        "n_image":
+            n_image,
+        "master_ix":
+            master_ix,
+        "master_date":
+            dates[master0],
+        "dates_start":
+            dates[0],
+        "dates_end":
+            dates[-1],
+        "product_kind_counts":
+            kind_counts,
+        "missing_dates":
+            missing_dates,
+        "product_unit_requested":
+            config.product_unit,
+        "min_valid_fraction":
+            config.min_valid_fraction,
+        "projection":
+            config.projection,
+        "incidence_source":
+            incidence_source,
+        "incidence_deg_median":
+            (
+                float(
+                    np.nanmedian(
+                        np.rad2deg(
+                            incidence
+                        )
+                    )
+                )
+                if config.projection
+                == "zenith"
+                else None
+            ),
+        "reference_source":
+            reference_source,
+        "reference_ps":
+            int(
+                ref_ix.size
+            ),
+        "correction_sign":
+            sign,
+        "sign_qa":
+            qa,
+        "wavelength_m":
+            wavelength_m,
+        "cache_signature":
+            cache_signature,
+        "sample_metadata":
+            metadata_by_kind,
+        "work_delay_file":
+            str(delay_path),
+        "inventory_csv":
+            str(
+                inventory_csv
+            ),
+        "duration_sec":
+            (
+                time.perf_counter()
+                - started
+            ),
+        "phase_formula":
+            (
+                "ph_corr(i) = ph_raw(i) "
+                "+ sign * 4*pi/lambda * "
+                "[(LOS_i-ref_i) - "
+                "(LOS_master-ref_master)]"
+            ),
+        "note":
+            (
+                "GACOS correction is "
+                "applied to single-master "
+                "phuw2 after Stage 6; "
+                "original phuw2.mat is "
+                "preserved."
+            ),
+    }
+
+    _write_json(
+        debug_path,
+        debug,
+    )
+
+    print(
+        "[GACOS] completed: "
+        f"{output}",
+        flush=True,
+    )
+
     return output

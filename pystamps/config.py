@@ -127,6 +127,110 @@ class ExternalToolsConfig:
 
 
 @dataclass(slots=True)
+class GacosConfig:
+    enabled: bool = False
+    gacos_dir: str | None = None
+
+    # auto | m | cm | mm
+    product_unit: str = "auto"
+
+    # zenith | los
+    projection: str = "zenith"
+
+    # auto | subtract | add
+    sign: str = "auto"
+
+    strict_dates: bool = True
+    rebuild: bool = False
+
+    incidence_tif: str | None = None
+    incidence_deg: float | None = None
+
+    qa_ps: int = 30000
+    qa_ifg: int = 80
+    chunk_ps: int = 4096
+    min_valid_fraction: float = 0.995
+
+    def __post_init__(self) -> None:
+        self.product_unit = str(
+            self.product_unit
+        ).strip().lower()
+
+        if self.product_unit not in {
+            "auto", "m", "cm", "mm"
+        }:
+            raise ConfigError(
+                "gacos.product_unit must be "
+                "auto, m, cm, or mm"
+            )
+
+        self.projection = str(
+            self.projection
+        ).strip().lower()
+
+        if self.projection not in {
+            "zenith", "los"
+        }:
+            raise ConfigError(
+                "gacos.projection must be "
+                "zenith or los"
+            )
+
+        aliases = {
+            "-": "subtract",
+            "+": "add",
+            "minus": "subtract",
+            "plus": "add",
+        }
+
+        self.sign = aliases.get(
+            str(self.sign).strip().lower(),
+            str(self.sign).strip().lower(),
+        )
+
+        if self.sign not in {
+            "auto", "subtract", "add"
+        }:
+            raise ConfigError(
+                "gacos.sign must be "
+                "auto, subtract, or add"
+            )
+
+        if self.incidence_deg is not None:
+            value = float(self.incidence_deg)
+            if not 0.0 < value < 90.0:
+                raise ConfigError(
+                    "gacos.incidence_deg must "
+                    "be between 0 and 90"
+                )
+
+        if int(self.qa_ps) <= 0:
+            raise ConfigError(
+                "gacos.qa_ps must be positive"
+            )
+
+        if int(self.qa_ifg) <= 0:
+            raise ConfigError(
+                "gacos.qa_ifg must be positive"
+            )
+
+        if int(self.chunk_ps) <= 0:
+            raise ConfigError(
+                "gacos.chunk_ps must be positive"
+            )
+
+        value = float(
+            self.min_valid_fraction
+        )
+
+        if not 0.0 < value <= 1.0:
+            raise ConfigError(
+                "gacos.min_valid_fraction must "
+                "be in (0, 1]"
+            )
+
+
+@dataclass(slots=True)
 class ReferenceConfig:
     mode: str = "auto"
     longitude: float | None = None
@@ -170,6 +274,7 @@ class RunConfig:
     tolerance: ToleranceConfig = field(default_factory=ToleranceConfig)
     ifg_selection: IFGSelectionConfig = field(default_factory=IFGSelectionConfig)
     tools: ExternalToolsConfig = field(default_factory=ExternalToolsConfig)
+    gacos: GacosConfig = field(default_factory=GacosConfig)
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     compat: CompatibilityConfig = field(default_factory=CompatibilityConfig)
 
@@ -335,12 +440,14 @@ def load_config(path: str | Path | None = None) -> RunConfig:
     )
 
     tools = ExternalToolsConfig(**_as_dict(raw, "tools"))
+    gacos = GacosConfig(**_as_dict(raw, "gacos"))
     reference = ReferenceConfig(**_as_dict(raw, "reference"))
     compat = CompatibilityConfig(**_as_dict(raw, "compat"))
     return RunConfig(ifg_selection=ifg_selection, 
         runtime=runtime,
         tolerance=tolerance,
         tools=tools,
+        gacos=gacos,
         reference=reference,
         compat=compat,
     )

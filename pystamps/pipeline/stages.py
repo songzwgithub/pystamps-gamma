@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import os
 import shutil
 import time
@@ -65,6 +66,170 @@ MERGED_STAGE_BUNDLES: dict[int, list[str]] = {
     7: ["scla_sb2.mat", "scla_smooth_sb2.mat", "scla2.mat"],
     8: ["scn2.mat"],
 }
+
+
+def _stage_phase_marker_path(
+    dataset_root: Path,
+    stage_id: int,
+) -> Path:
+    return (
+        dataset_root
+        / f"_pystamps_stage{stage_id}_phase_input.json"
+    )
+
+
+def _phase_input_signature(
+    dataset_root: Path,
+    phase_file: str,
+) -> dict[str, object]:
+
+    path = (
+        dataset_root
+        / phase_file
+    )
+
+    if not path.is_file():
+        raise StageExecutionError(
+            f"Stage phase input does not exist: {path}"
+        )
+
+    stat = path.stat()
+
+    return {
+        "phase_file": phase_file,
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _phase_input_is_current(
+    dataset_root: Path,
+    stage_id: int,
+    phase_file: str,
+) -> bool:
+
+    marker = _stage_phase_marker_path(
+        dataset_root,
+        stage_id,
+    )
+
+    # Backward compatibility:
+    #
+    # v1.0.0 Stage 7/8 outputs have no marker and were
+    # produced from ordinary phuw2.mat. Treat those as
+    # current while GACOS remains disabled.
+    if not marker.is_file():
+        return (
+            phase_file
+            == "phuw2.mat"
+        )
+
+    try:
+        saved = json.loads(
+            marker.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        current = _phase_input_signature(
+            dataset_root,
+            phase_file,
+        )
+
+        return (
+            saved.get("phase_file")
+            == current["phase_file"]
+            and int(
+                saved.get("size", -1)
+            )
+            == current["size"]
+            and int(
+                saved.get(
+                    "mtime_ns",
+                    -1,
+                )
+            )
+            == current["mtime_ns"]
+        )
+
+    except Exception:
+        return False
+
+
+def _write_phase_input_marker(
+    dataset_root: Path,
+    stage_id: int,
+    phase_file: str,
+) -> None:
+
+    payload = _phase_input_signature(
+        dataset_root,
+        phase_file,
+    )
+
+    marker = _stage_phase_marker_path(
+        dataset_root,
+        stage_id,
+    )
+
+    tmp = marker.with_suffix(
+        marker.suffix + ".tmp"
+    )
+
+    tmp.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    tmp.replace(marker)
+
+
+def _resolve_stage78_phase_file(
+    dataset_root: Path,
+    context: PipelineContext,
+) -> str:
+
+    # Stage 7 and Stage 8 in one pipeline invocation must use
+    # the exact same materialized phase product.
+    if context.stage78_phase_file is not None:
+        return context.stage78_phase_file
+
+    gacos = context.run_config.gacos
+
+    if not bool(gacos.enabled):
+        selected = "phuw2.mat"
+
+    elif context.dry_run:
+        # Dry-run must not create atmospheric products.
+        selected = "phuw2_gacos.mat"
+
+    else:
+        # Lazy import: ordinary non-GACOS runs never enter
+        # the atmospheric correction module.
+        from pystamps.pipeline.gacos_correction import (
+            ensure_gacos_corrected_phuw,
+        )
+
+        corrected = ensure_gacos_corrected_phuw(
+            dataset_root,
+            gacos,
+        )
+
+        if corrected.parent != dataset_root.resolve():
+            raise StageExecutionError(
+                "GACOS corrected phase was created outside "
+                "the dataset root"
+            )
+
+        selected = corrected.name
+
+    context.stage78_phase_file = selected
+    return selected
 
 
 def _normalize_backend(name: str) -> str:
@@ -314,10 +479,54 @@ def _run_merged_stage(
     ):
         force_run = True
 
+    phase_file = "phuw2.mat"
+
+    if stage.stage_id in {7, 8}:
+        phase_file = _resolve_stage78_phase_file(
+            dataset_root,
+            context,
+        )
+
+        if (
+            not context.dry_run
+            and not _phase_input_is_current(
+                dataset_root,
+                stage.stage_id,
+                phase_file,
+            )
+        ):
+            force_run = True
+
+        # Direct Stage-8 execution must not use an SCLA
+        # generated from a different phase input.
+        if (
+            stage.stage_id == 8
+            and not context.dry_run
+            and not _phase_input_is_current(
+                dataset_root,
+                7,
+                phase_file,
+            )
+        ):
+            force_run = True
+
     artifact = dataset_root / expected
     bundle = MERGED_STAGE_BUNDLES.get(stage.stage_id, [expected])
-    if not force_run and all((dataset_root / filename).exists() for filename in bundle):
-        return StageResult(stage.stage_id, "merged", dataset_root.name, "skipped_existing", f"{expected} present")
+
+    if (
+        not force_run
+        and all(
+            (dataset_root / filename).exists()
+            for filename in bundle
+        )
+    ):
+        return StageResult(
+            stage.stage_id,
+            "merged",
+            dataset_root.name,
+            "skipped_existing",
+            f"{expected} present",
+        )
 
     if context.dry_run:
         return StageResult(stage.stage_id, "merged", dataset_root.name, "planned", f"Would produce {expected}")
@@ -381,8 +590,39 @@ def _run_merged_stage(
                 enable_mat_cache=context.run_config.runtime.enable_mat_stage_cache,
                 io_workers=context.run_config.runtime.io_workers,
                 triangle_path=context.run_config.tools.triangle,
+                phase_file=phase_file,
             )
+
         elif stage.stage_id == 8:
+
+            # If Stage 8 is launched directly and Stage 7
+            # belongs to another phase input, rebuild SCLA
+            # first using the selected phase.
+            if not _phase_input_is_current(
+                dataset_root,
+                7,
+                phase_file,
+            ):
+                stage7_calc_scla(
+                    dataset_root,
+                    backend=_kernel_backend_for_name(
+                        context,
+                        "stage7_scla",
+                        context.run_config.runtime.backend,
+                    ),
+                    chunk_ps=context.run_config.runtime.stage7_chunk_ps,
+                    enable_mat_cache=context.run_config.runtime.enable_mat_stage_cache,
+                    io_workers=context.run_config.runtime.io_workers,
+                    triangle_path=context.run_config.tools.triangle,
+                    phase_file=phase_file,
+                )
+
+                _write_phase_input_marker(
+                    dataset_root,
+                    7,
+                    phase_file,
+                )
+
             details = stage8_filter_scn(
                 dataset_root,
                 backend=_kernel_backend_for_name(context, "stage8_edge_noise", context.run_config.runtime.backend),
@@ -392,7 +632,9 @@ def _run_merged_stage(
                 io_workers=context.run_config.runtime.io_workers,
                 triangle_path=context.run_config.tools.triangle,
                 snaphu_path=context.run_config.tools.snaphu,
+                phase_file=phase_file,
             )
+
         else:
             raise PortedStageError(f"No ported merged implementation for stage {stage.stage_id}")
     except PortedStageError as exc:
@@ -401,7 +643,22 @@ def _run_merged_stage(
             f"Expected output: {expected}. {exc}"
         ) from exc
 
-    return StageResult(stage.stage_id, "merged", dataset_root.name, "completed", details)
+    # Commit Stage 7/8 phase provenance only after the
+    # numerical stage has completed successfully.
+    if stage.stage_id in {7, 8}:
+        _write_phase_input_marker(
+            dataset_root,
+            stage.stage_id,
+            phase_file,
+        )
+
+    return StageResult(
+        stage.stage_id,
+        "merged",
+        dataset_root.name,
+        "completed",
+        details,
+    )
 
 
 def _run_merged_stage_timed(
@@ -422,6 +679,10 @@ def _selected_stages(start_step: int, end_step: int) -> list[StageDef]:
 
 
 def run_pipeline(context: PipelineContext) -> PipelineReport:
+    # The selected Stage7/8 phase product is valid only for
+    # this invocation.
+    context.stage78_phase_file = None
+
     dataset: DatasetLayout = discover_dataset(context.dataset_root)
     report = PipelineReport()
     patch_count = len(dataset.patches)

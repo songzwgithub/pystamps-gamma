@@ -137,6 +137,39 @@ ifg_selection:
   final_qc_preserve_network: true
   final_qc_fail_on_cap: true
   final_qc_chunk_ifg: 8
+
+# Optional GACOS atmospheric correction.
+#
+# enabled: false
+#   Completely skip GACOS. Stage 7/8 use phuw2.mat.
+#
+# enabled: true
+#   Apply GACOS after Stage 6.
+#   Stage 7/8 use phuw2_gacos.mat.
+#
+# Product type is detected automatically:
+#   *.tif / *.tiff -> GeoTIFF
+#   *.ztd + *.rsc  -> raw GACOS ZTD
+gacos:
+  enabled: false
+  gacos_dir: null
+
+  product_unit: auto
+  projection: zenith
+  sign: auto
+
+  strict_dates: true
+  rebuild: false
+
+  incidence_tif: null
+  incidence_deg: null
+
+  qa_ps: 30000
+  qa_ifg: 80
+  chunk_ps: 4096
+  min_valid_fraction: 0.995
+
+
 reference:
   # Priority:
   # 1. longitude + latitude set -> explicit reference.

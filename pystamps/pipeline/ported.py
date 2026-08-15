@@ -10863,6 +10863,7 @@ def stage7_calc_scla(
     io_workers: int = 0,
     mat_cache: dict[Path, dict[str, Any]] | None = None,
     triangle_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> str:
     if _stage78_dataset_is_sbas(dataset_root):
         from pystamps.pipeline.stage7_sbas import stage7_sbas_calc_scla
@@ -10875,7 +10876,15 @@ def stage7_calc_scla(
             io_workers=io_workers,
             mat_cache=mat_cache,
             triangle_path=triangle_path,
+            phase_file=phase_file,
         )
+
+    if phase_file != "phuw2.mat":
+        raise PortedStageError(
+            "Alternative Stage 7 phase input is currently "
+            "supported only for SBAS datasets"
+        )
+
     return _stage7_calc_scla_non_sbas(
         dataset_root,
         backend=backend,
@@ -10897,6 +10906,7 @@ def stage8_filter_scn(
     mat_cache: dict[Path, dict[str, Any]] | None = None,
     triangle_path: str | None = None,
     snaphu_path: str | None = None,
+    phase_file: str = "phuw2.mat",
 ) -> str:
     if _stage78_dataset_is_sbas(dataset_root):
         from pystamps.pipeline.stage8_sbas import stage8_sbas_filter_scn
@@ -10911,7 +10921,15 @@ def stage8_filter_scn(
             mat_cache=mat_cache,
             triangle_path=triangle_path,
             snaphu_path=snaphu_path,
+            phase_file=phase_file,
         )
+
+    if phase_file != "phuw2.mat":
+        raise PortedStageError(
+            "Alternative Stage 8 phase input is currently "
+            "supported only for SBAS datasets"
+        )
+
     return _stage8_filter_scn_non_sbas(
         dataset_root,
         backend=backend,

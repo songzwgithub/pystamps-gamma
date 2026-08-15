@@ -391,10 +391,46 @@ def _cmd_run(args: argparse.Namespace, run_config: RunConfig) -> int:
     if args.cpu_workers is not None:
         run_config.runtime.cpu_workers = args.cpu_workers
 
-    if str(getattr(run_config.runtime, "backend", "auto")) == "native":
-        payload = _run_native_pipeline(args, run_config)
-        print(json.dumps(payload, indent=2))
-        return 1 if any(result["status"] == "failed" for result in payload) else 0
+    backend = str(
+        getattr(
+            run_config.runtime,
+            "backend",
+            "auto",
+        )
+    ).strip().lower()
+
+    if (
+        backend == "native"
+        and bool(run_config.gacos.enabled)
+        and args.end_step >= 7
+        and args.start_step <= 8
+    ):
+        raise SystemExit(
+            "Config error: GACOS correction for Stage 7/8 "
+            "requires Python pipeline orchestration. "
+            "Set runtime.backend to auto, threads, processes, "
+            "or gpu."
+        )
+
+    if backend == "native":
+        payload = _run_native_pipeline(
+            args,
+            run_config,
+        )
+        print(
+            json.dumps(
+                payload,
+                indent=2,
+            )
+        )
+        return (
+            1
+            if any(
+                result["status"] == "failed"
+                for result in payload
+            )
+            else 0
+        )
 
     context = PipelineContext(
         dataset_root=Path(args.dataset).resolve(),

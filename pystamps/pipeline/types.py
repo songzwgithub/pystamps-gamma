@@ -20,6 +20,15 @@ class PipelineContext:
     dry_run: bool = False
     workflow_profile: WorkflowProfile = "default"
 
+    # Internal per-run cache. Stage 7 and Stage 8 must use
+    # exactly the same selected phase artifact, especially
+    # when gacos.rebuild=true.
+    stage78_phase_file: str | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
 
 @dataclass(slots=True)
 class StageResult:
