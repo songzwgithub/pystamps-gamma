@@ -43,3 +43,21 @@ venv/
 # OS/editor
 .DS_Store
 Thumbs.db
+
+# pySTAMPS local engineering/release artifacts
+outputs/
+.stage*_backup_/
+.stage*_backup_*/
+.engineering_postprocess_backup_/
+.engineering_postprocess_backup_*/
+.vertical_conversion_backup_/
+.vertical_conversion_backup_*/
+.release_v102_backup_/
+.release_v102_backup_*/
+
+# Local one-off migration/release helpers
+/add_engineering_postprocess.sh
+/add_vertical_conversion_oneclick.sh
+/finalize_readme_and_push_main.sh
+/release_pystamps_v1.0.2.sh
+/release_pystamps_v1.0.2_v2.sh

@@ -1,0 +1,70 @@
+# PYSTAMPS_CI_V102
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python-rust-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhdf5-dev
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Python compile
+        run: python -m compileall -q pystamps scripts
+
+      - name: Configuration contract
+        run: |
+          python - <<'PY'
+          import pystamps
+          from pystamps.config import load_config
+
+          cfg = load_config()
+
+          assert cfg.postprocess.enabled is True
+          assert cfg.postprocess.output_dir == "outputs"
+          assert cfg.postprocess.vertical_enabled is False
+          assert cfg.postprocess.vertical_incidence_source == "auto"
+          assert cfg.postprocess.vertical_incidence_deg is None
+          assert cfg.postprocess.vertical_positive == "up"
+
+          print("pySTAMPS version:", pystamps.__version__)
+          print("CONFIG CONTRACT: PASS")
+          PY
+
+      - name: CLI smoke
+        run: |
+          pystamps --help
+          pystamps-native --help
+
+      - name: Rust workspace check
+        run: cargo check --workspace
