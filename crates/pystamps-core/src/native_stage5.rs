@@ -32,15 +32,6 @@ struct Stage5Parms {
     heading: f64,
 }
 
-impl Default for Stage5Parms {
-    fn default() -> Self {
-        Self {
-            small_baseline_flag: "n".to_string(),
-            heading: 0.0,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Stage5PatchBundle {
     ps: MatData,
@@ -68,7 +59,7 @@ pub fn run_stage5_patch_native(patch_dir: impl AsRef<Path>) -> Result<String, Co
     let select1 = read_mat_stage5_vars(patch_dir, "select1.mat", STAGE5_SELECT1_VARS)?;
     let weed1 = read_mat_stage5_vars(patch_dir, "weed1.mat", &["ix_weed"])?;
     let ph1 = read_mat_stage5_vars(patch_dir, "ph1.mat", &["ph"])?;
-    let parms = load_stage5_parms(patch_dir);
+    let parms = load_stage5_parms(patch_dir)?;
 
     let n_ps1 = scalar_from_mat(&ps1, "n_ps", 0.0).round() as usize;
     if n_ps1 == 0 {
@@ -251,7 +242,7 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
         return stage5_err("No patch directories found for merged stage-5 processing");
     }
 
-    let parms = load_stage5_parms(dataset_root);
+    let parms = load_stage5_parms(dataset_root)?;
     let mut bundles = Vec::with_capacity(patch_dirs.len());
     for patch in &patch_dirs {
         bundles.push(load_stage5_patch_bundle(patch)?);
@@ -781,17 +772,25 @@ fn compute_patch_keep_mask(
     (keep_patch, remove_ix)
 }
 
-fn load_stage5_parms(patch_dir: &Path) -> Stage5Parms {
-    let Some(path) = resolve_file_optional(patch_dir, "parms.mat") else {
-        return Stage5Parms::default();
-    };
-    let Ok(mat) = MatData::read(path) else {
-        return Stage5Parms::default();
-    };
-    Stage5Parms {
+fn load_stage5_parms(patch_dir: &Path) -> Result<Stage5Parms, CoreError> {
+    let path = resolve_file_optional(patch_dir, "parms.mat").ok_or_else(|| {
+        stage5_err_owned(format!(
+            "required parms.mat is missing for {}",
+            patch_dir.display()
+        ))
+    })?;
+
+    let mat = MatData::read(&path).map_err(|err| {
+        stage5_err_owned(format!(
+            "unable to read required {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    Ok(Stage5Parms {
         small_baseline_flag: text_from_mat(&mat, "small_baseline_flag", "n"),
         heading: scalar_from_mat(&mat, "heading", 0.0),
-    }
+    })
 }
 
 fn write_merged_ps2(

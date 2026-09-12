@@ -1591,6 +1591,15 @@ def _resolve_ifg_selection_pre_qc_internal(
                 )
             ) else 0.0,
 
+        "pystamps_final_qc_require_signature":
+            1.0 if bool(
+                getattr(
+                    config,
+                    "final_qc_require_signature",
+                    True,
+                )
+            ) else 0.0,
+
         "pystamps_final_qc_chunk_ifg":
             float(
                 getattr(
@@ -1799,6 +1808,35 @@ def resolve_ifg_selection(
             )
             != "ok"
         ):
+            return result
+
+        from pystamps.final_ifg_qc import (
+            final_qc_provenance_is_current,
+            settings_from_parms,
+        )
+
+        final_settings = settings_from_parms(
+            parms
+        )
+        current_edges, current_day, _ = _load_network(
+            root,
+            result.n_ifg,
+        )
+
+        if not final_qc_provenance_is_current(
+            root,
+            payload,
+            current_edges,
+            final_settings,
+            day=current_day,
+        ):
+            print(
+                "[IFG_PRE_QC][WARNING] "
+                "historical FINAL-QC selection provenance does not "
+                "match the current acquisition network/settings; "
+                "the old drop list will not be restored",
+                flush=True,
+            )
             return result
 
         drops = [

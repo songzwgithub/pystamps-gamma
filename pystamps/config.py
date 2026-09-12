@@ -43,6 +43,8 @@ class RuntimeConfig:
     stage7_chunk_ps: int = 100_000
     stage8_chunk_edges: int = 200_000
     enable_mat_stage_cache: bool = True
+    # Validate upstream files + scientific settings before reusing Stage 2-8 outputs.
+    validate_stage_provenance: bool = True
     stage2_checkpoint_mode: str = "final"
     stage2_checkpoint_interval: int = 1
     stage2_debug: bool = False
@@ -103,6 +105,9 @@ class IFGSelectionConfig:
     # Default False preserves backward compatibility;
     # production.yaml explicitly enables it.
     final_ifg_qc_enabled: bool = True
+    # Never restore an historical FINAL-QC drop list unless its
+    # network/settings provenance matches the current dataset.
+    final_qc_require_signature: bool = True
 
     final_qc_msd_strong_percentile: float = 0.975
     final_qc_msd_extreme_percentile: float = 0.990

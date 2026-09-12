@@ -25,6 +25,11 @@ from pystamps.pipeline.ported import (
     stage5_correct_and_promote,
 )
 from pystamps.pipeline.types import PipelineContext, PipelineReport, StageResult
+from pystamps.pipeline.provenance import (
+    build_stage_signature,
+    stage_marker_is_current,
+    write_stage_marker,
+)
 from pystamps.runtime.executor import HybridExecutor
 from pystamps.reference import resolve_reference
 
@@ -468,6 +473,90 @@ def _effective_stage2_native_threads(
     return _configured_cpu_workers(context)
 
 
+def _stage_provenance_enabled(
+    context: PipelineContext,
+) -> bool:
+    return bool(
+        getattr(
+            context.run_config.runtime,
+            "validate_stage_provenance",
+            True,
+        )
+    )
+
+
+def _current_stage_provenance(
+    context: PipelineContext,
+    stage_id: int,
+    scope: str,
+    target_dir: Path,
+    *,
+    phase_file: str | None = None,
+) -> dict[str, object]:
+    return build_stage_signature(
+        dataset_root=context.dataset_root,
+        target_dir=target_dir,
+        stage_id=stage_id,
+        scope=scope,
+        run_config=context.run_config,
+        phase_file=phase_file,
+    )
+
+
+def _stage_provenance_is_current(
+    context: PipelineContext,
+    stage_id: int,
+    scope: str,
+    target_dir: Path,
+    *,
+    phase_file: str | None = None,
+) -> bool:
+    if not _stage_provenance_enabled(context):
+        return True
+
+    current = _current_stage_provenance(
+        context,
+        stage_id,
+        scope,
+        target_dir,
+        phase_file=phase_file,
+    )
+
+    return stage_marker_is_current(
+        target_dir,
+        stage_id,
+        scope,
+        current,
+    )
+
+
+def _commit_stage_provenance(
+    context: PipelineContext,
+    stage_id: int,
+    scope: str,
+    target_dir: Path,
+    *,
+    phase_file: str | None = None,
+) -> None:
+    if not _stage_provenance_enabled(context):
+        return
+
+    payload = _current_stage_provenance(
+        context,
+        stage_id,
+        scope,
+        target_dir,
+        phase_file=phase_file,
+    )
+
+    write_stage_marker(
+        target_dir,
+        stage_id,
+        scope,
+        payload,
+    )
+
+
 def _replay_from_reference(
     context: PipelineContext,
     scope: str,
@@ -580,13 +669,37 @@ def _run_patch_stage(stage: StageDef, patch_dir: Path, context: PipelineContext,
         stage.stage_id,
         "patch",
     )
-    if bundle and all((patch_dir / filename).exists() for filename in bundle):
-        return StageResult(
-            stage.stage_id,
-            "patch",
-            patch_dir.name,
-            "skipped_existing",
-            f"{expected} present; complete stage bundle present",
+    bundle_complete = bool(
+        bundle
+        and all(
+            (patch_dir / filename).exists()
+            for filename in bundle
+        )
+    )
+
+    if bundle_complete:
+        if (
+            stage.stage_id == 1
+            or _stage_provenance_is_current(
+                context,
+                stage.stage_id,
+                "patch",
+                patch_dir,
+            )
+        ):
+            return StageResult(
+                stage.stage_id,
+                "patch",
+                patch_dir.name,
+                "skipped_existing",
+                f"{expected} present; validated stage bundle present",
+            )
+
+        print(
+            f"[STAGE{stage.stage_id}] "
+            f"{patch_dir.name}: existing outputs have missing/stale "
+            "provenance; recomputing",
+            flush=True,
         )
 
     if context.dry_run:
@@ -594,6 +707,13 @@ def _run_patch_stage(stage: StageDef, patch_dir: Path, context: PipelineContext,
 
     replay_details = _replay_from_reference(context, "patch", stage.stage_id, patch_dir)
     if replay_details is not None:
+        if stage.stage_id >= 2:
+            _commit_stage_provenance(
+                context,
+                stage.stage_id,
+                "patch",
+                patch_dir,
+            )
         return StageResult(stage.stage_id, "patch", patch_dir.name, "completed", replay_details)
 
     try:
@@ -621,6 +741,14 @@ def _run_patch_stage(stage: StageDef, patch_dir: Path, context: PipelineContext,
             f"Stage {stage.stage_id} ({stage.name}) for {patch_dir.name} is not yet fully ported. "
             f"Expected output: {expected}. {exc}"
         ) from exc
+
+    if stage.stage_id >= 2:
+        _commit_stage_provenance(
+            context,
+            stage.stage_id,
+            "patch",
+            patch_dir,
+        )
 
     return StageResult(stage.stage_id, "patch", patch_dir.name, "completed", details)
 
@@ -696,19 +824,38 @@ def _run_merged_stage(
     if not bundle:
         bundle = [expected]
 
+    bundle_complete = all(
+        (dataset_root / filename).exists()
+        for filename in bundle
+    )
+
     if (
         not force_run
-        and all(
-            (dataset_root / filename).exists()
-            for filename in bundle
-        )
+        and bundle_complete
     ):
-        return StageResult(
+        if _stage_provenance_is_current(
+            context,
             stage.stage_id,
             "merged",
-            dataset_root.name,
-            "skipped_existing",
-            f"{expected} present",
+            dataset_root,
+            phase_file=(
+                phase_file
+                if stage.stage_id in {7, 8}
+                else None
+            ),
+        ):
+            return StageResult(
+                stage.stage_id,
+                "merged",
+                dataset_root.name,
+                "skipped_existing",
+                f"{expected} present; validated stage bundle present",
+            )
+
+        print(
+            f"[STAGE{stage.stage_id}] "
+            "merged outputs have missing/stale provenance; recomputing",
+            flush=True,
         )
 
     if context.dry_run:
@@ -716,6 +863,17 @@ def _run_merged_stage(
 
     replay_details = _replay_from_reference(context, "merged", stage.stage_id, dataset_root)
     if replay_details is not None:
+        _commit_stage_provenance(
+            context,
+            stage.stage_id,
+            "merged",
+            dataset_root,
+            phase_file=(
+                phase_file
+                if stage.stage_id in {7, 8}
+                else None
+            ),
+        )
         return StageResult(stage.stage_id, "merged", dataset_root.name, "completed", replay_details)
 
     try:
@@ -734,6 +892,12 @@ def _run_merged_stage(
                     backend=context.run_config.runtime.backend,
                     io_workers=context.run_config.runtime.io_workers,
                     enable_mat_cache=context.run_config.runtime.enable_mat_stage_cache,
+                )
+                _commit_stage_provenance(
+                    context,
+                    5,
+                    "merged",
+                    dataset_root,
                 )
 
             reference = resolve_reference(
@@ -805,6 +969,13 @@ def _run_merged_stage(
                     7,
                     phase_file,
                 )
+                _commit_stage_provenance(
+                    context,
+                    7,
+                    "merged",
+                    dataset_root,
+                    phase_file=phase_file,
+                )
 
             details = stage8_filter_scn(
                 dataset_root,
@@ -834,6 +1005,18 @@ def _run_merged_stage(
             stage.stage_id,
             phase_file,
         )
+
+    _commit_stage_provenance(
+        context,
+        stage.stage_id,
+        "merged",
+        dataset_root,
+        phase_file=(
+            phase_file
+            if stage.stage_id in {7, 8}
+            else None
+        ),
+    )
 
     return StageResult(
         stage.stage_id,

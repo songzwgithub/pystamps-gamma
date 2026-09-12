@@ -3523,8 +3523,11 @@ def stage6_sbas_unwrap(
                         "rc2.ph_rc",
                         np.complex64,
                     )
-                except Exception:
-                    ph_w = ph2.astype(np.complex64, copy=True)
+                except Exception as exc:
+                    raise Stage6SbasError(
+                        f"{rc_path} exists but rc2.ph_rc could not be read "
+                        f"or validated: {exc}"
+                    ) from exc
             else:
                 ph_w = ph2.astype(np.complex64, copy=True)
 

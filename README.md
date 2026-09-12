@@ -257,6 +257,7 @@ runtime:
 ifg_selection:
   mode: auto
   final_ifg_qc_enabled: true
+  final_qc_require_signature: true
   final_qc_preserve_network: true
 
 reference:
@@ -427,6 +428,18 @@ gacos:
 For SBAS processing, `phuw2.mat` contains one phase column per acquisition, not one column per SB interferogram. GACOS correction therefore works in the single-master acquisition domain. The atmospheric contribution for each acquisition is referenced to the master acquisition before phase correction.
 
 The production default is `sign: subtract`, matching the phase-domain GACOS convention used by LiCSBAS (`corrected_unw = unw - differential_GACOS_phase`). `sign: auto` remains available as an explicit QA/diagnostic mode and records the candidate-sign statistics.
+
+### Resume / provenance safety
+
+Production defaults use `runtime.validate_stage_provenance: true`.
+Stages 2-8 are reused only when their saved provenance matches the current
+upstream artifacts and scientific settings. Existing artifacts without a
+provenance marker are recomputed once rather than silently trusted.
+
+`ifg_selection.final_qc_require_signature: true` similarly prevents an
+historical `final_ifg_qc_selection.json` from restoring IFG indices into a
+different SBAS network. Automatic IFG QC remains enabled; only stale-result
+reuse is rejected.
 
 ### Outputs
 

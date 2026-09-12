@@ -43,6 +43,10 @@ runtime:
   stage4_debug: false
   enable_mat_stage_cache: true
 
+  # Reuse Stage 2-8 products only when upstream artifacts and
+  # scientific settings match the saved stage provenance.
+  validate_stage_provenance: true
+
 ifg_selection:
   # Automatic project-relative IFG QC.
   # No project-specific IFG numbers are hard-coded.
@@ -129,6 +133,11 @@ ifg_selection:
 
   # FINAL IFG-QC: GRID is preflag only; all IFGs are unwrapped first.
   final_ifg_qc_enabled: true
+
+  # Historical FINAL-QC decisions are restored only when the current
+  # acquisition network and scientific settings have the same signature.
+  final_qc_require_signature: true
+
   final_qc_msd_strong_percentile: 0.975
   final_qc_msd_extreme_percentile: 0.990
   final_qc_network_strong_percentile: 0.975

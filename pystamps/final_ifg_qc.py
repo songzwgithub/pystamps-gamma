@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -120,6 +121,17 @@ def settings_from_parms(
             )
         ),
 
+        "require_signature": bool(
+            round(
+                _scalar(
+                    parms.get(
+                        "pystamps_final_qc_require_signature"
+                    ),
+                    1.0,
+                )
+            )
+        ),
+
         "chunk_ifg": max(
             1,
             int(
@@ -134,6 +146,141 @@ def settings_from_parms(
             ),
         ),
     }
+
+
+def _array_sha256(
+    values: np.ndarray,
+    dtype: Any,
+) -> str:
+    array = np.ascontiguousarray(
+        np.asarray(
+            values,
+            dtype=dtype,
+        )
+    )
+    digest = hashlib.sha256()
+    digest.update(
+        str(array.shape).encode("utf-8")
+    )
+    digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _scientific_final_qc_settings(
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    keys = (
+        "enabled",
+        "msd_strong_percentile",
+        "msd_extreme_percentile",
+        "network_strong_percentile",
+        "network_extreme_percentile",
+        "max_drop_fraction",
+        "preserve_network",
+        "fail_on_cap",
+    )
+    return {
+        key: settings.get(key)
+        for key in keys
+    }
+
+
+def build_final_qc_provenance(
+    root: Path,
+    ifgday_ix: np.ndarray,
+    settings: dict[str, Any],
+    *,
+    day: np.ndarray | None = None,
+) -> dict[str, Any]:
+    root = Path(root).expanduser().resolve()
+
+    edges = np.asarray(
+        ifgday_ix,
+        dtype=np.int64,
+    )
+    if edges.ndim == 2 and edges.shape[0] == 2:
+        edges = edges.T
+
+    if edges.ndim != 2 or edges.shape[1] != 2:
+        raise FinalIFGQCError(
+            f"Cannot build FINAL-QC provenance from ifgday_ix shape {edges.shape}"
+        )
+
+    if day is None:
+        ps2_path = root / "ps2.mat"
+        if not ps2_path.is_file():
+            raise FinalIFGQCError(
+                f"Cannot build FINAL-QC provenance: missing {ps2_path}"
+            )
+        payload = read_mat_variables(
+            ps2_path,
+            ("day",),
+        )
+        day = np.asarray(
+            payload.get("day"),
+            dtype=np.float64,
+        ).reshape(-1)
+    else:
+        day = np.asarray(
+            day,
+            dtype=np.float64,
+        ).reshape(-1)
+
+    if day.size == 0:
+        raise FinalIFGQCError(
+            "Cannot build FINAL-QC provenance from an empty acquisition day vector"
+        )
+
+    return {
+        "schema": 1,
+        "method": METHOD,
+        "n_ifg": int(edges.shape[0]),
+        "n_image": int(day.size),
+        "ifgday_ix_sha256": _array_sha256(
+            edges,
+            np.int64,
+        ),
+        "day_sha256": _array_sha256(
+            day,
+            np.float64,
+        ),
+        "settings": _scientific_final_qc_settings(
+            settings
+        ),
+    }
+
+
+def final_qc_provenance_is_current(
+    root: Path,
+    selection_payload: dict[str, Any],
+    ifgday_ix: np.ndarray,
+    settings: dict[str, Any],
+    *,
+    day: np.ndarray | None = None,
+) -> bool:
+    saved = selection_payload.get(
+        "provenance"
+    )
+
+    if not isinstance(saved, dict):
+        return not bool(
+            settings.get(
+                "require_signature",
+                True,
+            )
+        )
+
+    try:
+        current = build_final_qc_provenance(
+            root,
+            ifgday_ix,
+            settings,
+            day=day,
+        )
+    except Exception:
+        return False
+
+    return saved == current
 
 
 def _robust_high_z(
@@ -724,6 +871,12 @@ def run_final_ifg_qc(
             f"{edges.shape}"
         )
 
+    provenance = build_final_qc_provenance(
+        root,
+        edges,
+        settings,
+    )
+
     residual_path = (
         root
         / "phuw_sb_res2.mat"
@@ -1095,6 +1248,7 @@ def run_final_ifg_qc(
         summary = {
             "method": METHOD,
             "status": "candidate_cap_exceeded",
+            "provenance": provenance,
             "n_ifg": int(n_ifg),
             "candidate_count":
                 candidate_count,
@@ -1347,6 +1501,9 @@ def run_final_ifg_qc(
 
         "status":
             "ok",
+
+        "provenance":
+            provenance,
 
         "n_ifg":
             int(n_ifg),
