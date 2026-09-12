@@ -1,0 +1,63 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Native binary artifacts
+*.so
+*.dylib
+*.dll
+*.pyd
+
+# Rust build
+/target/
+
+# Python build
+/build/
+/dist/
+*.egg-info/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local development/archive
+/_archive/
+/bin/
+
+# Temporary and historical patch files
+*.bak
+*.old
+*.tmp
+*.swp
+*broken*
+*before_*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# pySTAMPS local engineering/release artifacts
+outputs/
+.stage*_backup_/
+.stage*_backup_*/
+.engineering_postprocess_backup_/
+.engineering_postprocess_backup_*/
+.vertical_conversion_backup_/
+.vertical_conversion_backup_*/
+.release_v102_backup_/
+.release_v102_backup_*/
+
+# Local one-off migration/release helpers
+/add_engineering_postprocess.sh
+/add_vertical_conversion_oneclick.sh
+/finalize_readme_and_push_main.sh
+/release_pystamps_v1.0.2.sh
+/release_pystamps_v1.0.2_v2.sh
