@@ -68,6 +68,41 @@ MERGED_STAGE_BUNDLES: dict[int, list[str]] = {
 }
 
 
+def _processor_is_gamma(dataset_root: Path) -> bool:
+    processor_file = dataset_root / "processor.txt"
+    if not processor_file.is_file():
+        return False
+    try:
+        processor = processor_file.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        ).strip().lower()
+    except OSError:
+        return False
+    return processor == "gamma"
+
+
+def _required_stage_bundle(
+    dataset_root: Path,
+    stage_id: int,
+    scope: str,
+) -> list[str]:
+    base = (
+        PATCH_STAGE_BUNDLES.get(stage_id, [])
+        if scope == "patch"
+        else MERGED_STAGE_BUNDLES.get(stage_id, [])
+    )
+    bundle = list(base)
+
+    if _processor_is_gamma(dataset_root):
+        if scope == "patch" and stage_id == 1 and "inc1.mat" not in bundle:
+            bundle.append("inc1.mat")
+        if stage_id == 5 and "inc2.mat" not in bundle:
+            bundle.append("inc2.mat")
+
+    return bundle
+
+
 # === STAGE1_AUTO_PREP_V1 ===
 
 _STAGE1_ROOT_REQUIRED = (
@@ -86,7 +121,12 @@ def _stage1_dataset_complete(dataset: DatasetLayout) -> bool:
     if not all((dataset.root / name).is_file() for name in _STAGE1_ROOT_REQUIRED):
         return False
 
-    required = PATCH_STAGE_BUNDLES[1]
+    required = _required_stage_bundle(
+        dataset.root,
+        1,
+        "patch",
+    )
+
     return all(
         all((patch / name).is_file() for name in required)
         for patch in dataset.patches
@@ -443,7 +483,11 @@ def _replay_from_reference(
         raise StageExecutionError(f"Reference root does not exist: {ref_root}")
 
     rel_dir = target_dir.relative_to(context.dataset_root)
-    bundle = PATCH_STAGE_BUNDLES.get(stage_id, []) if scope == "patch" else MERGED_STAGE_BUNDLES.get(stage_id, [])
+    bundle = _required_stage_bundle(
+        context.dataset_root,
+        stage_id,
+        scope,
+    )
     copied: list[str] = []
     missing: list[str] = []
 
@@ -531,8 +575,19 @@ def _run_patch_stage(stage: StageDef, patch_dir: Path, context: PipelineContext,
         return StageResult(stage.stage_id, "patch", patch_dir.name, "skipped", "No expected artifact mapping")
 
     artifact = patch_dir / expected
-    if artifact.exists():
-        return StageResult(stage.stage_id, "patch", patch_dir.name, "skipped_existing", f"{expected} present")
+    bundle = _required_stage_bundle(
+        context.dataset_root,
+        stage.stage_id,
+        "patch",
+    )
+    if bundle and all((patch_dir / filename).exists() for filename in bundle):
+        return StageResult(
+            stage.stage_id,
+            "patch",
+            patch_dir.name,
+            "skipped_existing",
+            f"{expected} present; complete stage bundle present",
+        )
 
     if context.dry_run:
         return StageResult(stage.stage_id, "patch", patch_dir.name, "planned", f"Would produce {expected}")
@@ -633,7 +688,13 @@ def _run_merged_stage(
             force_run = True
 
     artifact = dataset_root / expected
-    bundle = MERGED_STAGE_BUNDLES.get(stage.stage_id, [expected])
+    bundle = _required_stage_bundle(
+        dataset_root,
+        stage.stage_id,
+        "merged",
+    )
+    if not bundle:
+        bundle = [expected]
 
     if (
         not force_run

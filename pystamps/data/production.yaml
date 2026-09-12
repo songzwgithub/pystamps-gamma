@@ -156,7 +156,8 @@ gacos:
 
   product_unit: auto
   projection: zenith
-  sign: auto
+  # Trusted phase-domain convention (LiCSBAS): subtract differential LOS delay.
+  sign: subtract
 
   strict_dates: true
   rebuild: false
@@ -192,11 +193,11 @@ postprocess:
   # Assumption: horizontal deformation is negligible.
   vertical_enabled: false
 
-  # auto | la2 | constant
-  # auto prefers per-PS incidence angle from merged la2.mat.
+  # auto | inc2 | constant
+  # auto requires exact per-PS incidence angle from merged inc2.mat.
   vertical_incidence_source: auto
 
-  # constant mode value, or auto fallback if la2.mat is unavailable.
+  # Used only when vertical_incidence_source=constant.
   vertical_incidence_deg: null
 
   # up   : uplift positive, subsidence negative

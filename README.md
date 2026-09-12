@@ -403,7 +403,7 @@ gacos:
   gacos_dir: null
   product_unit: auto
   projection: zenith
-  sign: auto
+  sign: subtract
   strict_dates: true
   rebuild: false
   incidence_tif: null
@@ -426,7 +426,7 @@ gacos:
 
 For SBAS processing, `phuw2.mat` contains one phase column per acquisition, not one column per SB interferogram. GACOS correction therefore works in the single-master acquisition domain. The atmospheric contribution for each acquisition is referenced to the master acquisition before phase correction.
 
-With `sign: auto`, pySTAMPS-GAMMA evaluates the candidate correction signs from project data and records the selected sign and QA statistics.
+The production default is `sign: subtract`, matching the phase-domain GACOS convention used by LiCSBAS (`corrected_unw = unw - differential_GACOS_phase`). `sign: auto` remains available as an explicit QA/diagnostic mode and records the candidate-sign statistics.
 
 ### Outputs
 
@@ -643,6 +643,8 @@ la2       require the per-PS incidence angle in la2.mat
 
 constant  use vertical_incidence_deg for all PS
 ```
+
+`la2.mat` stores **look angle**, not incidence angle, so it is not used for LOS projection. GAMMA Stage 1 writes incidence separately to `inc1.mat`; Stage 5 promotes and merges it as `inc2.mat`.
 
 Sign convention:
 

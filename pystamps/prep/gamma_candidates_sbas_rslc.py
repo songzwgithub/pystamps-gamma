@@ -702,12 +702,19 @@ def extract_candidates_from_project_rslc_sbas(
                         ]
                     )
 
-                    amplitude = np.nan_to_num(
+                    amplitude = np.asarray(
                         amplitude,
-                        nan=0.0,
-                        posinf=0.0,
-                        neginf=0.0,
+                        dtype=np.float32,
                     )
+
+                    invalid_amplitude = (
+                        ~np.isfinite(amplitude)
+                        | (amplitude <= 0.0)
+                    )
+
+                    if np.any(invalid_amplitude):
+                        amplitude = amplitude.copy()
+                        amplitude[invalid_amplitude] = np.nan
 
                     stack[
                         image_index,
@@ -730,6 +737,11 @@ def extract_candidates_from_project_rslc_sbas(
             sum_difference_sq = np.zeros(
                 single_pixel_count,
                 dtype=np.float64,
+            )
+
+            valid_edge_count = np.zeros(
+                single_pixel_count,
+                dtype=np.int32,
             )
 
             for edge_index in range(
@@ -759,18 +771,30 @@ def extract_candidates_from_project_rslc_sbas(
                     )
                 )
 
-                sum_amplitude += (
-                    master + slave
+                valid_edge = (
+                    np.isfinite(master)
+                    & np.isfinite(slave)
+                    & (master > 0.0)
+                    & (slave > 0.0)
                 )
 
-                difference = (
-                    master - slave
-                )
+                if np.any(valid_edge):
+                    sum_amplitude[valid_edge] += (
+                        master[valid_edge]
+                        + slave[valid_edge]
+                    )
 
-                sum_difference_sq += (
-                    difference
-                    * difference
-                )
+                    difference = (
+                        master[valid_edge]
+                        - slave[valid_edge]
+                    )
+
+                    sum_difference_sq[valid_edge] += (
+                        difference
+                        * difference
+                    )
+
+                    valid_edge_count[valid_edge] += 1
 
                 if (
                     (edge_index + 1) % 50 == 0
@@ -784,11 +808,35 @@ def extract_candidates_from_project_rslc_sbas(
 
             del stack
 
-            mean_single = (
-                sum_amplitude
+            valid_fraction_single = (
+                valid_edge_count.astype(
+                    np.float64,
+                    copy=False,
+                )
+                / float(n_edges)
+            )
+
+            mean_single = np.full(
+                single_pixel_count,
+                np.nan,
+                dtype=np.float64,
+            )
+
+            has_valid_edges = (
+                valid_edge_count > 0
+            )
+
+            mean_single[
+                has_valid_edges
+            ] = (
+                sum_amplitude[
+                    has_valid_edges
+                ]
                 / (
                     2.0
-                    * n_edges
+                    * valid_edge_count[
+                        has_valid_edges
+                    ]
                 )
             )
 
@@ -799,11 +847,18 @@ def extract_candidates_from_project_rslc_sbas(
             )
 
             usable_single = (
-                np.isfinite(
+                has_valid_edges
+                & np.isfinite(
                     mean_single
                 )
                 & (
                     mean_single > 0
+                )
+                & (
+                    valid_fraction_single
+                    >= float(
+                        config.min_valid_fraction
+                    )
                 )
             )
 
@@ -814,7 +869,9 @@ def extract_candidates_from_project_rslc_sbas(
                     sum_difference_sq[
                         usable_single
                     ]
-                    / n_edges
+                    / valid_edge_count[
+                        usable_single
+                    ]
                 )
                 / mean_single[
                     usable_single
@@ -852,6 +909,15 @@ def extract_candidates_from_project_rslc_sbas(
                 range_looks,
             )
 
+            valid_fraction_4d = (
+                valid_fraction_single.reshape(
+                    ml_ny,
+                    azimuth_looks,
+                    ml_width,
+                    range_looks,
+                )
+            )
+
             da_group = (
                 da_4d.transpose(
                     0,
@@ -871,6 +937,23 @@ def extract_candidates_from_project_rslc_sbas(
 
             mean_group = (
                 mean_4d.transpose(
+                    0,
+                    2,
+                    1,
+                    3,
+                )
+                .reshape(
+                    ml_ny,
+                    ml_width,
+                    (
+                        azimuth_looks
+                        * range_looks
+                    ),
+                )
+            )
+
+            valid_fraction_group = (
+                valid_fraction_4d.transpose(
                     0,
                     2,
                     1,
@@ -907,6 +990,20 @@ def extract_candidates_from_project_rslc_sbas(
 
             mean_ml = np.take_along_axis(
                 mean_group,
+                best_look[
+                    :,
+                    :,
+                    None,
+                ],
+                axis=2,
+            )[
+                :,
+                :,
+                0,
+            ]
+
+            valid_fraction_ml = np.take_along_axis(
+                valid_fraction_group,
                 best_look[
                     :,
                     :,
@@ -996,9 +1093,11 @@ def extract_candidates_from_project_rslc_sbas(
             )
 
             selected_valid_fraction.append(
-                np.ones(
-                    local_rows.size,
-                    dtype=np.float32,
+                valid_fraction_ml[
+                    local_rows,
+                    local_cols,
+                ].astype(
+                    np.float32
                 )
             )
 

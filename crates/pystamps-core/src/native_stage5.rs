@@ -57,6 +57,7 @@ struct Stage5PatchBundle {
     bp: Option<Matrix<f32>>,
     hgt: Option<Vec<f64>>,
     la: Option<Vec<f64>>,
+    inc: Option<Vec<f64>>,
     rc: Option<ComplexMatrixF32>,
 }
 
@@ -175,6 +176,7 @@ pub fn run_stage5_patch_native(patch_dir: impl AsRef<Path>) -> Result<String, Co
     let ph_patch = select_rows_complex_matrix(&ph_patch2, &kept_ix2_positions);
     promote_optional_vector_f32(patch_dir, "hgt1.mat", "hgt2.mat", "hgt", n_ps1, &final_ix0)?;
     promote_optional_vector_f64(patch_dir, "la1.mat", "la2.mat", "la", n_ps1, &final_ix0)?;
+    promote_optional_vector_f64(patch_dir, "inc1.mat", "inc2.mat", "inc", n_ps1, &final_ix0)?;
     promote_optional_vector_f64(patch_dir, "da1.mat", "da2.mat", "D_A", n_ps1, &final_ix0)?;
 
     let bperp_mat2 = if patch_dir.join("bp1.mat").exists() {
@@ -255,6 +257,17 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
         bundles.push(load_stage5_patch_bundle(patch)?);
     }
 
+    let incidence_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.inc.is_some())
+        .count();
+    if incidence_bundle_count != 0 && incidence_bundle_count != bundles.len() {
+        return stage5_err(format!(
+            "Per-PS incidence artifact inc2.mat is present in only {incidence_bundle_count}/{} patches",
+            bundles.len()
+        ));
+    }
+
     let mut ij = Vec::new();
     let mut lonlat = Vec::new();
     let mut ph2 = Vec::new();
@@ -266,10 +279,12 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
     let mut bp = Vec::new();
     let mut hgt = Vec::new();
     let mut la = Vec::new();
+    let mut inc = Vec::new();
     let mut rc = Vec::new();
     let mut has_bp = false;
     let mut has_hgt = false;
     let mut has_la = false;
+    let mut has_inc = false;
     let mut has_rc = false;
     let mut remove_ix = Vec::new();
     let mut merged_index_by_key: HashMap<(i64, i64), usize> = HashMap::new();
@@ -324,6 +339,10 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
             has_la = true;
             append_values_f64(&mut la, la_patch, &kept_ix);
         }
+        if let Some(inc_patch) = &bundle.inc {
+            has_inc = true;
+            append_values_f64(&mut inc, inc_patch, &kept_ix);
+        }
         if let Some(rc_patch) = &bundle.rc {
             has_rc = true;
             rc_cols = rc_patch.cols;
@@ -368,6 +387,13 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
     });
     let xy_sorted = select_rows_plain(&xy_local, 2, &sort_ix);
     let final_indices: Vec<usize> = sort_ix.iter().map(|&pos| active_indices[pos]).collect();
+
+    let inc_selected = if has_inc {
+        select_values_plain(&inc, &final_indices)
+    } else {
+        Vec::new()
+    };
+
     (
         ij, lonlat, ph2, k_ps, c_ps, coh_ps, ph_patch, ph_res, bp, hgt, la, rc,
     ) = apply_stage5_index_all(
@@ -412,7 +438,24 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
         &c_ps,
     )?;
 
-    write_merged_ps2(dataset_root, &base_ps, &ij, &lonlat, &xy, &ll0_xy)?;
+    let merged_mean_incidence = if inc_selected.is_empty() {
+        None
+    } else {
+        Some(
+            inc_selected.iter().copied().sum::<f64>()
+                / inc_selected.len() as f64,
+        )
+    };
+
+    write_merged_ps2(
+        dataset_root,
+        &base_ps,
+        &ij,
+        &lonlat,
+        &xy,
+        &ll0_xy,
+        merged_mean_incidence,
+    )?;
     write_merged_ph2(dataset_root, n_ps, ph_cols, ph2)?;
     write_merged_pm2(
         dataset_root,
@@ -439,6 +482,26 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
         let mut la2 = MatFile::new(dataset_root.join("la2.mat"));
         la2.add_f64_col_vector("la", la)?;
         la2.write()?;
+    }
+    if has_inc {
+        if inc_selected.len() != n_ps {
+            return stage5_err(format!(
+                "Merged incidence vector length {} does not match n_ps={n_ps}",
+                inc_selected.len()
+            ));
+        }
+        if inc_selected.iter().any(|value| {
+            !value.is_finite()
+                || *value <= 0.0
+                || *value >= std::f64::consts::FRAC_PI_2
+        }) {
+            return stage5_err(
+                "Merged inc2.inc contains invalid incidence angle outside (0, pi/2)"
+            );
+        }
+        let mut inc2 = MatFile::new(dataset_root.join("inc2.mat"));
+        inc2.add_f64_col_vector("inc", inc_selected)?;
+        inc2.write()?;
     }
     if has_rc {
         let rc_payload = format_merged_rc2_payload(&rc, n_ps, rc_cols);
@@ -619,6 +682,17 @@ fn load_stage5_patch_bundle(patch: &Path) -> Result<Stage5PatchBundle, CoreError
     } else {
         None
     };
+    let inc = if patch.join("inc2.mat").exists() {
+        let mat = read_mat_stage5(patch, "inc2.mat")?;
+        Some(ps_vector_f64(
+            &mat,
+            "inc",
+            n_ps,
+            &format!("{patch_name}.inc2.inc"),
+        )?)
+    } else {
+        None
+    };
     let rc = if patch.join("rc2.mat").exists() {
         let mat = read_mat_stage5_vars(patch, "rc2.mat", &["ph_rc", "rc"])?;
         match mat
@@ -650,6 +724,7 @@ fn load_stage5_patch_bundle(patch: &Path) -> Result<Stage5PatchBundle, CoreError
         bp,
         hgt,
         la,
+        inc,
         rc,
     })
 }
@@ -681,10 +756,11 @@ fn compute_patch_keep_mask(
         for (idx, row) in ij.values.chunks_exact(3).enumerate() {
             let col = row[1].round() as i64;
             let line = row[2].round() as i64;
-            keep_patch[idx] = col >= col_min - 1
-                && col <= col_max - 1
-                && line >= row_min - 1
-                && line <= row_max - 1;
+            // patch_noover.in and ps*.ij are both one-based inclusive.
+            keep_patch[idx] = col >= col_min
+                && col <= col_max
+                && line >= row_min
+                && line <= row_max;
         }
     }
 
@@ -725,6 +801,7 @@ fn write_merged_ps2(
     lonlat: &[f64],
     xy: &[f32],
     ll0_xy: &[f64],
+    mean_incidence_override: Option<f64>,
 ) -> Result<(), CoreError> {
     let n_ps = ij.len() / 3;
     let mut ps2 = MatFile::new(dataset_root.join("ps2.mat"));
@@ -749,9 +826,11 @@ fn write_merged_ps2(
     ps2.add_f64_scalar("n_image", scalar_from_mat(base_ps, "n_image", 0.0))?;
     ps2.add_f64_scalar("n_ps", n_ps as f64)?;
     ps2.add_f32_matrix("xy", n_ps, 3, xy.to_vec())?;
-    if let Some(mean_incidence) =
-        optional_vector_f64(base_ps, "mean_incidence").and_then(|values| values.first().copied())
-    {
+    let mean_incidence = mean_incidence_override.or_else(|| {
+        optional_vector_f64(base_ps, "mean_incidence")
+            .and_then(|values| values.first().copied())
+    });
+    if let Some(mean_incidence) = mean_incidence {
         ps2.add_f64_scalar("mean_incidence", mean_incidence)?;
     }
     if let Some(mean_range) =

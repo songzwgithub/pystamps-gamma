@@ -56,7 +56,7 @@ class StageOptions:
     clap_low_pass_wavelength: float = 800.0
     clap_alpha: float = 1.0
     clap_beta: float = 0.3
-    max_topo_err: float = 20.0
+    max_topo_err: float = 15.0
     lambda_m: float = 0.0555
     mean_range: float = 830000.0
     mean_incidence: float = np.deg2rad(23.0)
@@ -97,6 +97,7 @@ class Stage5PatchBundle:
     bp_patch: np.ndarray | None = None
     hgt_patch: np.ndarray | None = None
     la_patch: np.ndarray | None = None
+    inc_patch: np.ndarray | None = None
     rc_patch: np.ndarray | None = None
 
 
@@ -542,8 +543,10 @@ def _build_stage_options(patch_dir: Path) -> StageOptions:
 
     try:
         parms = read_mat(parms_file)
-    except Exception:
-        return options
+    except Exception as exc:
+        raise PortedStageError(
+            f"Unable to read required parameter file {parms_file}: {exc}"
+        ) from exc
 
     options.grid_size = _mat_scalar(parms.get("filter_grid_size", options.grid_size), options.grid_size)
     options.clap_win = _mat_scalar(parms.get("clap_win", options.clap_win), options.clap_win)
@@ -574,8 +577,10 @@ def _load_parms(patch_dir: Path) -> Parms:
 
     try:
         raw = read_mat(parms_file)
-    except Exception:
-        return Parms()
+    except Exception as exc:
+        raise PortedStageError(
+            f"Unable to read Stage parameter file {parms_file}: {exc}"
+        ) from exc
 
     small_baseline_flag = _mat_text(
         raw.get("small_baseline_flag", "n"),
@@ -5127,9 +5132,19 @@ def stage2_estimate_gamma(
         return _kernel_backend_for_name(kernel_backend_overrides_norm, kernel_name, kernel_backend_norm)
 
     gamma_change_convergence = float(
-        _mat_scalar(parms_raw.get("gamma_change_convergence", 0.005), 0.005)
+        _mat_scalar(
+            parms_raw.get("gamma_change_convergence", 1.0e-4),
+            1.0e-4,
+        )
     )
-    gamma_max_iterations = int(round(_mat_scalar(parms_raw.get("gamma_max_iterations", 3.0), 3.0)))
+    gamma_max_iterations = int(
+        round(
+            _mat_scalar(
+                parms_raw.get("gamma_max_iterations", 25.0),
+                25.0,
+            )
+        )
+    )
     clap_window = int(round(options.clap_win * 0.75))
     clap_pad = int(round(options.clap_win * 0.25))
 
@@ -9314,6 +9329,24 @@ def stage5_correct_and_promote(patch_dir: Path, backend: str = "auto") -> str:
         la = _as_ps_vector(read_mat(la1).get("la"), n_ps1, "la1.la").astype(np.float64)
         write_mat(patch_dir / "la2.mat", {"la": _matlab_col(la[final_ix], np.float64)})
 
+    inc1 = patch_dir / "inc1.mat"
+    if inc1.exists():
+        inc = _as_ps_vector(read_mat(inc1).get("inc"), n_ps1, "inc1.inc").astype(np.float64)
+        inc_selected = inc[final_ix]
+        if (
+            not np.all(np.isfinite(inc_selected))
+            or np.any(inc_selected <= 0.0)
+            or np.any(inc_selected >= (np.pi / 2.0))
+        ):
+            raise PortedStageError(
+                "inc1.inc contains invalid per-PS incidence angles; "
+                "expected finite radians in (0, pi/2)"
+            )
+        write_mat(
+            patch_dir / "inc2.mat",
+            {"inc": _matlab_col(inc_selected, np.float64)},
+        )
+
     bp1 = patch_dir / "bp1.mat"
     bperp_mat2: np.ndarray | None = None
     if bp1.exists():
@@ -9416,6 +9449,15 @@ def _load_stage5_patch_bundle(patch: Path) -> Stage5PatchBundle:
     if la_file.exists():
         la_patch = _as_ps_vector(read_mat(la_file).get("la"), n_ps_patch, f"{patch.name}.la2.la").astype(np.float64)
 
+    inc_patch: np.ndarray | None = None
+    inc_file = patch / "inc2.mat"
+    if inc_file.exists():
+        inc_patch = _as_ps_vector(
+            read_mat(inc_file).get("inc"),
+            n_ps_patch,
+            f"{patch.name}.inc2.inc",
+        ).astype(np.float64)
+
     rc_patch: np.ndarray | None = None
     rc_file = patch / "rc2.mat"
     if rc_file.exists():
@@ -9446,6 +9488,7 @@ def _load_stage5_patch_bundle(patch: Path) -> Stage5PatchBundle:
         bp_patch=bp_patch,
         hgt_patch=hgt_patch,
         la_patch=la_patch,
+        inc_patch=inc_patch,
         rc_patch=rc_patch,
     )
 
@@ -9459,11 +9502,12 @@ def _compute_patch_keep_mask(
     keep_patch = np.ones(ij_cols.shape[0], dtype=bool)
     if patch_bounds is not None:
         row_min, row_max, col_min, col_max = patch_bounds
+        # patch_noover.in and ps*.ij are both one-based inclusive.
         keep_patch = (
-            (ij_cols[:, 0] >= col_min - 1)
-            & (ij_cols[:, 0] <= col_max - 1)
-            & (ij_cols[:, 1] >= row_min - 1)
-            & (ij_cols[:, 1] <= row_max - 1)
+            (ij_cols[:, 0] >= col_min)
+            & (ij_cols[:, 0] <= col_max)
+            & (ij_cols[:, 1] >= row_min)
+            & (ij_cols[:, 1] <= row_max)
         )
 
     remove_ix: list[int] = []
@@ -9525,6 +9569,7 @@ def _stage5_merge_and_ifgstd_legacy(
     bp_chunks: list[np.ndarray] = []
     hgt_chunks: list[np.ndarray] = []
     la_chunks: list[np.ndarray] = []
+    inc_chunks: list[np.ndarray] = []
     rc_chunks: list[np.ndarray] = []
     remove_ix: list[int] = []
     merged_index_by_key: dict[bytes, int] = {}
@@ -9558,6 +9603,8 @@ def _stage5_merge_and_ifgstd_legacy(
             hgt_chunks.append(bundle.hgt_patch[keep_patch])
         if bundle.la_patch is not None:
             la_chunks.append(bundle.la_patch[keep_patch])
+        if bundle.inc_patch is not None:
+            inc_chunks.append(bundle.inc_patch[keep_patch])
         if bundle.rc_patch is not None:
             rc_chunks.append(np.asarray(bundle.rc_patch)[keep_patch, ...])
 
@@ -9581,12 +9628,13 @@ def _stage5_merge_and_ifgstd_legacy(
     bp2_all = _concat_rows(bp_chunks).astype(np.float32) if bp_chunks else None
     hgt2_all = _concat_rows(hgt_chunks).astype(np.float64) if hgt_chunks else None
     la2_all = _concat_rows(la_chunks).astype(np.float64) if la_chunks else None
+    inc2_all = _concat_rows(inc_chunks).astype(np.float64) if inc_chunks else None
     rc2_all = _concat_rows([np.asarray(r) for r in rc_chunks]) if rc_chunks else None
 
     if remove_ix:
         keep_overlap = np.ones(ij.shape[0], dtype=bool)
         keep_overlap[np.asarray(remove_ix, dtype=np.int64)] = False
-        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, rc2_all = _apply_selector_all(
+        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, inc2_all, rc2_all = _apply_selector_all(
             keep_overlap,
             ij,
             lonlat,
@@ -9599,12 +9647,13 @@ def _stage5_merge_and_ifgstd_legacy(
             bp2_all,
             hgt2_all,
             la2_all,
+            inc2_all,
             rc2_all,
         )
 
     keep = _dedup_lonlat_keep_highest_coh(lonlat, coh_ps)
     if keep.size == lonlat.shape[0] and not np.all(keep):
-        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, rc2_all = _apply_selector_all(
+        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, inc2_all, rc2_all = _apply_selector_all(
             keep,
             ij,
             lonlat,
@@ -9617,6 +9666,7 @@ def _stage5_merge_and_ifgstd_legacy(
             bp2_all,
             hgt2_all,
             la2_all,
+            inc2_all,
             rc2_all,
         )
 
@@ -9624,7 +9674,7 @@ def _stage5_merge_and_ifgstd_legacy(
         xy_local, ll0_xy = _local_xy_from_lonlat(lonlat, heading_deg=heading_deg)
         xy_sort_key = np.asarray(xy_local, dtype=np.float32)
         sort_ix = np.lexsort((xy_sort_key[:, 0], xy_sort_key[:, 1]))
-        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, rc2_all = _apply_selector_all(
+        ij, lonlat, ph2, K_ps, C_ps, coh_ps, ph_patch, ph_res, bp2_all, hgt2_all, la2_all, inc2_all, rc2_all = _apply_selector_all(
             sort_ix,
             ij,
             lonlat,
@@ -9637,6 +9687,7 @@ def _stage5_merge_and_ifgstd_legacy(
             bp2_all,
             hgt2_all,
             la2_all,
+            inc2_all,
             rc2_all,
         )
         xy_local = xy_sort_key[sort_ix, :]
@@ -9662,7 +9713,12 @@ def _stage5_merge_and_ifgstd_legacy(
         "n_ps": np.asarray(ij.shape[0], dtype=np.float64),
         "xy": xy,
     }
-    if "mean_incidence" in base_ps:
+    if inc2_all is not None and inc2_all.size:
+        ps2_payload["mean_incidence"] = np.asarray(
+            float(np.mean(inc2_all)),
+            dtype=np.float64,
+        )
+    elif "mean_incidence" in base_ps:
         ps2_payload["mean_incidence"] = np.asarray(base_ps["mean_incidence"], dtype=np.float64)
     if "mean_range" in base_ps:
         ps2_payload["mean_range"] = np.asarray(base_ps["mean_range"], dtype=np.float64)
@@ -9694,6 +9750,10 @@ def _stage5_merge_and_ifgstd_legacy(
         la2_payload = {"la": _matlab_col(la2_all, np.float64)}
         write_mat(dataset_root / "la2.mat", la2_payload)
         _cache_mat_payload(dataset_root / "la2.mat", la2_payload, cache, enabled=enable_mat_cache)
+    if inc2_all is not None:
+        inc2_payload = {"inc": _matlab_col(inc2_all, np.float64)}
+        write_mat(dataset_root / "inc2.mat", inc2_payload)
+        _cache_mat_payload(dataset_root / "inc2.mat", inc2_payload, cache, enabled=enable_mat_cache)
     if rc2_all is not None:
         rc2_payload = _format_merged_rc2_payload(rc2_all)
         write_mat(dataset_root / "rc2.mat", {"ph_rc": rc2_payload})

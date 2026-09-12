@@ -99,10 +99,12 @@ def _day_labels(day: np.ndarray) -> list[str]:
     if not values.size:
         raise GacosCorrectionError("Acquisition day vector is empty")
     median = float(np.nanmedian(values))
-    if median > 500000:
-        return [_matlab_day_to_date(v) for v in values]
+    # YYYYMMDD (e.g. 20210101) is also > 500000, so this test
+    # must precede the MATLAB-datenum branch.
     if median > 10_000_000:
         return [str(int(round(v))) for v in values]
+    if median > 500000:
+        return [_matlab_day_to_date(v) for v in values]
     raise GacosCorrectionError(
         "Acquisition dates are not MATLAB datenums or YYYYMMDD values"
     )
@@ -296,7 +298,7 @@ def _load_config(
 
     sign = os.environ.get(
         "PYSTAMPS_GACOS_SIGN",
-        "auto",
+        "subtract",
     ).strip().lower()
 
     aliases = {
@@ -685,54 +687,152 @@ def _incidence_from_tif(path: Path, lon: np.ndarray, lat: np.ndarray) -> np.ndar
     return values
 
 
+def _normalize_incidence_vector(
+    values: Any,
+    n_ps: int,
+    source: str,
+) -> np.ndarray:
+    angle = np.asarray(
+        values,
+        dtype=np.float64,
+    ).reshape(-1)
+
+    if angle.size != n_ps:
+        raise GacosCorrectionError(
+            f"{source} incidence count={angle.size}, expected n_ps={n_ps}"
+        )
+
+    if not np.all(np.isfinite(angle)):
+        bad = int(np.count_nonzero(~np.isfinite(angle)))
+        raise GacosCorrectionError(
+            f"{source} contains {bad} non-finite incidence angles"
+        )
+
+    q95 = float(
+        np.nanpercentile(
+            np.abs(angle),
+            95.0,
+        )
+    )
+
+    if q95 <= (np.pi / 2.0 + 0.15):
+        radians = angle
+    elif q95 < 90.0:
+        radians = np.deg2rad(angle)
+    else:
+        raise GacosCorrectionError(
+            f"{source} has an invalid incidence-angle range; q95={q95}"
+        )
+
+    valid = (
+        np.isfinite(radians)
+        & (radians > 0.0)
+        & (radians < np.pi / 2.0)
+    )
+
+    if not np.all(valid):
+        bad = int(np.count_nonzero(~valid))
+        raise GacosCorrectionError(
+            f"{source} contains {bad} incidence angles outside (0, 90 deg)"
+        )
+
+    return radians.astype(
+        np.float64,
+        copy=False,
+    )
+
+
 def _resolve_incidence(
+    dataset_root: Path,
     config: ResolvedGacosConfig,
-    ps2: dict[str, Any],
-    parms: dict[str, Any],
     lon: np.ndarray,
     lat: np.ndarray,
 ) -> tuple[np.ndarray, str]:
     if config.projection == "los":
-        return np.zeros(lon.size, dtype=np.float64), "not_required_product_is_los"
+        return (
+            np.zeros(
+                lon.size,
+                dtype=np.float64,
+            ),
+            "not_required_product_is_los",
+        )
+
+    n_ps = int(lon.size)
 
     if config.incidence_tif is not None:
         if not config.incidence_tif.is_file():
             raise GacosCorrectionError(
                 f"Incidence GeoTIFF does not exist: {config.incidence_tif}"
             )
-        incidence = _incidence_from_tif(config.incidence_tif, lon, lat)
-        finite = incidence[np.isfinite(incidence)]
-        if finite.size == 0:
-            raise GacosCorrectionError("Incidence GeoTIFF produced no finite PS values")
-        if float(np.nanpercentile(np.abs(finite), 95)) <= math.pi + 0.1:
-            radians = incidence
-            source = f"radian_tif:{config.incidence_tif}"
-        else:
-            radians = np.deg2rad(incidence)
-            source = f"degree_tif:{config.incidence_tif}"
-        return radians.astype(np.float64), source
+
+        incidence = _incidence_from_tif(
+            config.incidence_tif,
+            lon,
+            lat,
+        )
+
+        radians = _normalize_incidence_vector(
+            incidence,
+            n_ps,
+            f"incidence_tif:{config.incidence_tif}",
+        )
+
+        return (
+            radians,
+            f"per_ps_incidence_tif:{config.incidence_tif}",
+        )
+
+    inc2_path = (
+        Path(dataset_root)
+        .expanduser()
+        .resolve()
+        / "inc2.mat"
+    )
+
+    if inc2_path.is_file():
+        payload = read_mat_variables(
+            inc2_path,
+            (
+                "inc",
+                "incidence_angle",
+            ),
+        )
+
+        raw = payload.get("inc")
+        variable = "inc"
+
+        if raw is None or np.asarray(raw).size == 0:
+            raw = payload.get("incidence_angle")
+            variable = "incidence_angle"
+
+        if raw is None or np.asarray(raw).size == 0:
+            raise GacosCorrectionError(
+                f"{inc2_path} exists but contains neither 'inc' nor "
+                "'incidence_angle'"
+            )
+
+        radians = _normalize_incidence_vector(
+            raw,
+            n_ps,
+            f"{inc2_path.name}:{variable}",
+        )
+
+        return (
+            radians,
+            f"{inc2_path.name}:{variable}:per_ps",
+        )
 
     if config.incidence_deg is not None:
-        radians = np.full(lon.size, math.radians(config.incidence_deg), dtype=np.float64)
-        return radians, "PYSTAMPS_GACOS_INCIDENCE_DEG"
-
-    candidates = [
-        (ps2.get("mean_incidence"), "ps2.mean_incidence"),
-        (parms.get("mean_incidence"), "parms.mean_incidence"),
-        (parms.get("incidence_angle"), "parms.incidence_angle"),
-    ]
-    for raw, source in candidates:
-        if raw is None or np.asarray(raw).size == 0:
-            continue
-        value = float(np.asarray(raw).reshape(-1)[0])
-        radians = value if abs(value) <= math.pi + 0.1 else math.radians(value)
-        if not (0.0 < radians < math.radians(89.0)):
-            continue
-        return np.full(lon.size, radians, dtype=np.float64), source
+        raise GacosCorrectionError(
+            "gacos.incidence_deg is a scalar and is not accepted for "
+            "production zenith GACOS correction. Provide merged inc2.mat "
+            "or gacos.incidence_tif."
+        )
 
     raise GacosCorrectionError(
-        "No incidence angle is available. Set PYSTAMPS_GACOS_INCIDENCE_DEG "
-        "or PYSTAMPS_GACOS_INCIDENCE_TIF."
+        "Per-PS incidence angle is required for zenith GACOS correction. "
+        f"Missing {inc2_path}. Re-run Stage 1 and Stage 5 with the current "
+        "pySTAMPS-GAMMA code, or provide gacos.incidence_tif."
     )
 
 
@@ -770,6 +870,17 @@ def _robust_scale(values: np.ndarray, axis: int = 0) -> np.ndarray:
     return 1.4826 * np.nanmedian(np.abs(values - median), axis=axis)
 
 
+
+# Production physical convention for unwrapped phase:
+#   LOS delay = ZTD / cos(incidence)
+#   atmospheric phase = 4*pi/lambda * differential_LOS_delay
+#   corrected phase = unwrapped phase - atmospheric phase
+#
+# Reference implementations:
+#   yumorishita/LiCSBAS/bin/LiCSBAS03op_GACOS.py
+#   insarlab/MintPy/src/mintpy/tropo_gacos.py
+#
+# "auto" remains available only when explicitly requested for QA/diagnostics.
 
 def _choose_sign(
     ph_sm: np.ndarray,
@@ -1501,6 +1612,38 @@ def ensure_gacos_corrected_phuw(
         / "phuw2.mat"
     ).stat()
 
+    if config.projection == "los":
+        incidence_geometry_signature = {
+            "mode": "not_required_product_is_los",
+        }
+    elif config.incidence_tif is not None:
+        if not config.incidence_tif.is_file():
+            raise GacosCorrectionError(
+                f"Incidence GeoTIFF does not exist: {config.incidence_tif}"
+            )
+        incidence_stat = config.incidence_tif.stat()
+        incidence_geometry_signature = {
+            "mode": "per_ps_tif",
+            "path": str(config.incidence_tif),
+            "size": incidence_stat.st_size,
+            "mtime_ns": incidence_stat.st_mtime_ns,
+        }
+    else:
+        inc2_path = root / "inc2.mat"
+        if inc2_path.is_file():
+            incidence_stat = inc2_path.stat()
+            incidence_geometry_signature = {
+                "mode": "per_ps_inc2",
+                "path": str(inc2_path),
+                "size": incidence_stat.st_size,
+                "mtime_ns": incidence_stat.st_mtime_ns,
+            }
+        else:
+            incidence_geometry_signature = {
+                "mode": "missing_per_ps_incidence",
+                "path": str(inc2_path),
+            }
+
     cache_signature = {
         "phase_mode":
             "single_master",
@@ -1526,6 +1669,8 @@ def ensure_gacos_corrected_phuw(
             ),
         "incidence_deg":
             config.incidence_deg,
+        "incidence_geometry":
+            incidence_geometry_signature,
         "master_ix":
             master_ix,
         "n_image":
@@ -1587,9 +1732,8 @@ def ensure_gacos_corrected_phuw(
 
     incidence, incidence_source = (
         _resolve_incidence(
+            root,
             config,
-            ps2,
-            parms,
             lon,
             lat,
         )

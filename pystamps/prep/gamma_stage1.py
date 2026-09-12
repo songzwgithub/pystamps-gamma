@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -343,6 +344,11 @@ def _write_root_metadata(
         "filter_grid_size": 50.0,
         "quick_est_gamma_flag": "y",
         "select_reest_gamma_flag": "y",
+        # Explicit strict production solver settings. Keep these in
+        # parms.mat so Python and native entry points cannot silently
+        # fall back to different iteration controls.
+        "gamma_change_convergence": 1.0e-4,
+        "gamma_max_iterations": 25.0,
         "clap_win": 32.0,
         "clap_low_pass_wavelength": 800.0,
         "clap_alpha": 1.0,
@@ -669,6 +675,19 @@ def _write_patch_stage1(
             "la": _column(
                 look_angle,
                 dtype=np.float32,
+            )
+        },
+    )
+
+    # Exact per-PS incidence angle in radians.
+    # Keep this separate from la1.mat: la = look angle, inc = incidence angle.
+    write_mat(
+        patch_directory
+        / "inc1.mat",
+        {
+            "inc": _column(
+                incidence_angle,
+                dtype=np.float64,
             )
         },
     )
@@ -1068,11 +1087,67 @@ def prepare_gamma_sbas_stage1(
         / "stage1_candidate_cache_tag.json"
     )
 
+    # Candidate-cache identity must depend on the actual network/data, not
+    # only on D_A threshold and multilook factors. We intentionally hash
+    # metadata (path, size, mtime_ns), not multi-GB RSLC contents.
+    cache_digest = hashlib.sha256()
+    cache_digest.update(b"pystamps-stage1-candidate-cache-v2\n")
+    cache_digest.update(
+        (
+            f"source={str(config.candidate_source).strip().lower()}\n"
+            f"da={float(config.candidate.da_threshold):.12g}\n"
+            f"min_valid_fraction={float(config.candidate.min_valid_fraction):.12g}\n"
+            f"range_looks={resolved_range_looks}\n"
+            f"azimuth_looks={resolved_azimuth_looks}\n"
+            f"row_start={int(config.candidate_row_start)}\n"
+            f"row_stop={config.candidate_row_stop}\n"
+        ).encode("utf-8")
+    )
+
+    def _cache_stat(kind: str, identity: str, raw_path) -> None:
+        path = Path(raw_path).expanduser().resolve()
+        if not path.is_file():
+            raise GammaInputError(
+                f"Stage-1 cache fingerprint input is missing: {path}"
+            )
+        stat = path.stat()
+        cache_digest.update(
+            (
+                f"{kind}|{identity}|{path}|"
+                f"{stat.st_size}|{stat.st_mtime_ns}\n"
+            ).encode("utf-8")
+        )
+
+    for acquisition in project.acquisitions:
+        identity = str(acquisition.date)
+        _cache_stat("rslc", identity, acquisition.rslc)
+        _cache_stat("rslc_par", identity, acquisition.par)
+        if (
+            str(config.candidate_source).strip().lower() == "mli"
+            and acquisition.mli is not None
+        ):
+            _cache_stat("mli", identity, acquisition.mli)
+            if acquisition.mli_par is not None:
+                _cache_stat("mli_par", identity, acquisition.mli_par)
+
+    for interferogram in project.interferograms:
+        identity = (
+            f"{interferogram.master_index}:{interferogram.slave_index}:"
+            f"{interferogram.master_date}_{interferogram.slave_date}"
+        )
+        cache_digest.update(f"edge|{identity}\n".encode("utf-8"))
+        _cache_stat("diff", identity, interferogram.diff)
+        _cache_stat("base", identity, interferogram.base)
+
+    input_fingerprint = cache_digest.hexdigest()[:20]
+
     default_cache_tag = (
         f"{str(config.candidate_source).strip().lower()}"
         f"_da{float(config.candidate.da_threshold):.3f}"
+        f"_vf{float(config.candidate.min_valid_fraction):.3f}"
         f"_rl{resolved_range_looks}"
         f"_al{resolved_azimuth_looks}"
+        f"_net{input_fingerprint}"
     )
 
     expected_cache_tag = os.environ.get(
@@ -1124,7 +1199,7 @@ def prepare_gamma_sbas_stage1(
         adopt_existing = (
             os.environ.get(
                 "PYSTAMPS_STAGE1_ADOPT_EXISTING_CACHE",
-                "1",
+                "0",
             ).strip().lower()
             in {"1", "true", "yes", "y", "on"}
         )
@@ -1506,6 +1581,7 @@ def prepare_gamma_sbas_stage1(
                 "bp1.mat",
                 "da1.mat",
                 "la1.mat",
+                "inc1.mat",
                 "hgt1.mat",
                 "gamma_patch_manifest.json",
             )

@@ -71,37 +71,49 @@ def _resolve_incidence(
     source = str(source).strip().lower()
     root = Path(dataset_root).expanduser().resolve()
 
-    if source not in {"auto", "la2", "constant"}:
+    if source not in {"auto", "inc2", "constant"}:
         raise VerticalExportError(
-            f"unsupported incidence source: {source}"
+            "unsupported incidence source: "
+            f"{source}; use auto, inc2, or constant"
         )
 
-    la2 = root / "la2.mat"
+    inc2 = root / "inc2.mat"
 
-    if source in {"auto", "la2"} and la2.is_file():
-        payload = read_mat(la2)
-
-        if "la" in payload:
-            angle = _normalize_incidence_angle_rad(
-                payload["la"],
-                n_ps,
-            )
-            return angle, "la2.mat:la"
-
-        if source == "la2":
+    if source in {"auto", "inc2"}:
+        if not inc2.is_file():
             raise VerticalExportError(
-                "la2.mat exists but variable 'la' is missing"
+                "Per-PS incidence is required for LOS-to-vertical conversion. "
+                f"Missing {inc2}. Re-run Stage 1 and Stage 5, or explicitly "
+                "choose vertical_incidence_source=constant if a constant-angle "
+                "approximation is intentionally desired."
             )
 
-    if source == "la2":
-        raise VerticalExportError(
-            f"vertical_incidence_source=la2 but {la2} is unavailable"
+        payload = read_mat(inc2)
+        raw = payload.get(
+            "inc",
+            payload.get("incidence_angle"),
+        )
+
+        if raw is None or np.asarray(raw).size == 0:
+            raise VerticalExportError(
+                f"{inc2} exists but contains neither 'inc' nor "
+                "'incidence_angle'"
+            )
+
+        angle = _normalize_incidence_angle_rad(
+            raw,
+            n_ps,
+        )
+
+        return (
+            angle,
+            "inc2.mat:inc:per_ps",
         )
 
     if constant_deg is None:
         raise VerticalExportError(
-            "No usable la2.mat was found and "
-            "vertical_incidence_deg is null"
+            "vertical_incidence_deg is required when "
+            "vertical_incidence_source=constant"
         )
 
     degree = float(constant_deg)
@@ -117,7 +129,7 @@ def _resolve_incidence(
             np.deg2rad(degree),
             dtype=np.float64,
         ),
-        f"constant:{degree:.6f}deg",
+        f"constant_explicit:{degree:.6f}deg",
     )
 
 

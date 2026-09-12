@@ -138,7 +138,9 @@ class GacosConfig:
     projection: str = "zenith"
 
     # auto | subtract | add
-    sign: str = "auto"
+    # LiCSBAS phase convention: corrected_unw = unw - differential_GACOS_phase.
+    # "auto" remains supported as an explicit diagnostic mode.
+    sign: str = "subtract"
 
     strict_dates: bool = True
     rebuild: bool = False
@@ -250,7 +252,8 @@ class PostprocessConfig:
     # LOS -> vertical conversion. Horizontal motion is assumed negligible.
     vertical_enabled: bool = False
 
-    # auto | la2 | constant
+    # auto | inc2 | constant
+    # auto requires exact per-PS incidence from merged inc2.mat.
     vertical_incidence_source: str = "auto"
     vertical_incidence_deg: float | None = None
 
@@ -276,11 +279,11 @@ class PostprocessConfig:
         ).strip().lower()
 
         if self.vertical_incidence_source not in {
-            "auto", "la2", "constant"
+            "auto", "inc2", "constant"
         }:
             raise ConfigError(
                 "postprocess.vertical_incidence_source must be "
-                "auto, la2, or constant"
+                "auto, inc2, or constant"
             )
 
         self.vertical_positive = str(
