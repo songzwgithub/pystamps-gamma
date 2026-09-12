@@ -38,9 +38,9 @@ impl Default for Stage8Parms {
             ref_lon: vec![f64::NEG_INFINITY, f64::INFINITY],
             ref_lat: vec![f64::NEG_INFINITY, f64::INFINITY],
             ref_radius: f64::INFINITY,
-            max_topo_err: 15.0,
+            max_topo_err: 20.0,
             lambda_m: 0.0555,
-            unwrap_time_win: 36.0,
+            unwrap_time_win: 730.0,
         }
     }
 }

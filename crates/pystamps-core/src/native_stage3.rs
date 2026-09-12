@@ -25,9 +25,9 @@ struct Stage3Parms {
 impl Default for Stage3Parms {
     fn default() -> Self {
         Self {
-            select_method: "PERCENT".to_string(),
-            percent_rand: 1.0,
-            density_rand: 1.0,
+            select_method: "DENSITY".to_string(),
+            percent_rand: 20.0,
+            density_rand: 20.0,
             small_baseline_flag: "n".to_string(),
             drop_ifg_index: Vec::new(),
             gamma_stdev_reject: 0.0,
@@ -154,11 +154,20 @@ fn load_stage3_parms(patch_dir: &Path) -> Stage3Parms {
         return Stage3Parms::default();
     };
     let source = Stage3MatSource::read(path);
+    let small_baseline_flag = source.text("small_baseline_flag", "n");
+    let is_small_baseline = small_baseline_flag.eq_ignore_ascii_case("y");
+
     Stage3Parms {
-        select_method: source.text("select_method", "PERCENT"),
-        percent_rand: source.scalar("percent_rand", 1.0),
-        density_rand: source.scalar("density_rand", 1.0),
-        small_baseline_flag: source.text("small_baseline_flag", "n"),
+        select_method: source.text("select_method", "DENSITY"),
+        percent_rand: source.scalar(
+            "percent_rand",
+            if is_small_baseline { 1.0 } else { 20.0 },
+        ),
+        density_rand: source.scalar(
+            "density_rand",
+            if is_small_baseline { 2.0 } else { 20.0 },
+        ),
+        small_baseline_flag,
         drop_ifg_index: source
             .vector_f64("drop_ifg_index")
             .unwrap_or_default()

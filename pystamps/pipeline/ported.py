@@ -56,7 +56,7 @@ class StageOptions:
     clap_low_pass_wavelength: float = 800.0
     clap_alpha: float = 1.0
     clap_beta: float = 0.3
-    max_topo_err: float = 15.0
+    max_topo_err: float = 20.0
     lambda_m: float = 0.0555
     mean_range: float = 830000.0
     mean_incidence: float = np.deg2rad(23.0)
@@ -64,18 +64,18 @@ class StageOptions:
 
 @dataclass(slots=True)
 class Parms:
-    select_method: str = "PERCENT"
-    percent_rand: float = 1.0
-    density_rand: float = 1.0
+    select_method: str = "DENSITY"
+    percent_rand: float = 20.0
+    density_rand: float = 20.0
     small_baseline_flag: str = "n"
     drop_ifg_index: np.ndarray = field(default_factory=lambda: np.asarray([], dtype=np.int64))
-    weed_standard_dev: float = np.pi
-    weed_max_noise: float = np.pi
+    weed_standard_dev: float = 1.0
+    weed_max_noise: float = np.inf
     weed_zero_elevation: str = "n"
-    weed_neighbours: str = "y"
+    weed_neighbours: str = "n"
     gamma_stdev_reject: float = 0.0
     slc_osf: float = 1.0
-    weed_time_win: float = 360.0
+    weed_time_win: float = 730.0
 
 
 @dataclass(slots=True)
@@ -577,19 +577,59 @@ def _load_parms(patch_dir: Path) -> Parms:
     except Exception:
         return Parms()
 
+    small_baseline_flag = _mat_text(
+        raw.get("small_baseline_flag", "n"),
+        "n",
+    )
+    is_small_baseline = small_baseline_flag.lower() == "y"
+
+    default_percent_rand = 1.0 if is_small_baseline else 20.0
+    default_density_rand = 2.0 if is_small_baseline else 20.0
+    default_weed_standard_dev = np.inf if is_small_baseline else 1.0
+
     return Parms(
-        select_method=_mat_text(raw.get("select_method", "PERCENT"), "PERCENT"),
-        percent_rand=_mat_scalar(raw.get("percent_rand", 1.0), 1.0),
-        density_rand=_mat_scalar(raw.get("density_rand", 1.0), 1.0),
-        small_baseline_flag=_mat_text(raw.get("small_baseline_flag", "n"), "n"),
+        select_method=_mat_text(
+            raw.get("select_method", "DENSITY"),
+            "DENSITY",
+        ),
+        percent_rand=_mat_scalar(
+            raw.get("percent_rand", default_percent_rand),
+            default_percent_rand,
+        ),
+        density_rand=_mat_scalar(
+            raw.get("density_rand", default_density_rand),
+            default_density_rand,
+        ),
+        small_baseline_flag=small_baseline_flag,
         drop_ifg_index=_normalize_drop_index(raw.get("drop_ifg_index", None)),
-        weed_standard_dev=_mat_scalar(raw.get("weed_standard_dev", np.pi), np.pi),
-        weed_max_noise=_mat_scalar(raw.get("weed_max_noise", np.pi), np.pi),
-        weed_zero_elevation=_mat_text(raw.get("weed_zero_elevation", "n"), "n"),
-        weed_neighbours=_mat_text(raw.get("weed_neighbours", "y"), "y"),
-        gamma_stdev_reject=_mat_scalar(raw.get("gamma_stdev_reject", 0.0), 0.0),
-        slc_osf=_mat_scalar(raw.get("slc_osf", 1.0), 1.0),
-        weed_time_win=_mat_scalar(raw.get("weed_time_win", 360.0), 360.0),
+        weed_standard_dev=_mat_scalar(
+            raw.get("weed_standard_dev", default_weed_standard_dev),
+            default_weed_standard_dev,
+        ),
+        weed_max_noise=_mat_scalar(
+            raw.get("weed_max_noise", np.inf),
+            np.inf,
+        ),
+        weed_zero_elevation=_mat_text(
+            raw.get("weed_zero_elevation", "n"),
+            "n",
+        ),
+        weed_neighbours=_mat_text(
+            raw.get("weed_neighbours", "n"),
+            "n",
+        ),
+        gamma_stdev_reject=_mat_scalar(
+            raw.get("gamma_stdev_reject", 0.0),
+            0.0,
+        ),
+        slc_osf=_mat_scalar(
+            raw.get("slc_osf", 1.0),
+            1.0,
+        ),
+        weed_time_win=_mat_scalar(
+            raw.get("weed_time_win", 730.0),
+            730.0,
+        ),
     )
 
 
@@ -5087,9 +5127,9 @@ def stage2_estimate_gamma(
         return _kernel_backend_for_name(kernel_backend_overrides_norm, kernel_name, kernel_backend_norm)
 
     gamma_change_convergence = float(
-        _mat_scalar(parms_raw.get("gamma_change_convergence", 1e-4), 1e-4)
+        _mat_scalar(parms_raw.get("gamma_change_convergence", 0.005), 0.005)
     )
-    gamma_max_iterations = int(round(_mat_scalar(parms_raw.get("gamma_max_iterations", 25.0), 25.0)))
+    gamma_max_iterations = int(round(_mat_scalar(parms_raw.get("gamma_max_iterations", 3.0), 3.0)))
     clap_window = int(round(options.clap_win * 0.75))
     clap_pad = int(round(options.clap_win * 0.25))
 
@@ -10303,13 +10343,13 @@ def stage6_unwrap(
         day_rel = day_full - day_full[master_ix - 1]
         bperp_full = _as_ps_vector(ps2.get("bperp"), n_ifg, "ps2.bperp").astype(np.float64)
         bperp_use = bperp_full[unwrap_ifg_ix]
-        max_topo_err = float(_mat_scalar(parms_raw.get("max_topo_err", 15.0), 15.0))
+        max_topo_err = float(_mat_scalar(parms_raw.get("max_topo_err", 20.0), 20.0))
         lambda_m = float(_mat_scalar(parms_raw.get("lambda", 0.0555), 0.0555))
         mean_range = float(_mat_scalar(ps2.get("mean_range", 830000.0), 830000.0))
         mean_incidence = float(_mat_scalar(ps2.get("mean_incidence", np.deg2rad(23.0)), np.deg2rad(23.0)))
         max_K = max_topo_err / (lambda_m * mean_range * math.sin(mean_incidence) / (4.0 * math.pi))
         n_trial_wraps = float(np.max(bperp_full) - np.min(bperp_full)) * max_K / (2.0 * math.pi)
-        time_win = float(_mat_scalar(parms_raw.get("unwrap_time_win", 36.0), 36.0))
+        time_win = float(_mat_scalar(parms_raw.get("unwrap_time_win", 730.0), 730.0))
 
         edgs = np.asarray(uw_interp_payload.get("edgs"), dtype=np.float64)
         space_time_t0 = time.perf_counter()
@@ -10709,13 +10749,13 @@ def stage8_filter_scn(
     unwrap_ifg, _ifgday_ix = _build_single_master_ifg_geometry(n_ifg, master_ix)
     bperp_full = _as_ps_vector(ps2.get("bperp"), n_ifg, "ps2.bperp").astype(np.float64)
     bperp_use = bperp_full[unwrap_ifg - 1]
-    max_topo_err = float(_mat_scalar(parms_raw.get("max_topo_err", 15.0), 15.0))
+    max_topo_err = float(_mat_scalar(parms_raw.get("max_topo_err", 20.0), 20.0))
     lambda_m = float(_mat_scalar(parms_raw.get("lambda", 0.0555), 0.0555))
     mean_range = float(_mat_scalar(ps2.get("mean_range", 830000.0), 830000.0))
     mean_incidence = float(_mat_scalar(ps2.get("mean_incidence", np.deg2rad(23.0)), np.deg2rad(23.0)))
     max_K = max_topo_err / (lambda_m * mean_range * math.sin(mean_incidence) / (4.0 * math.pi))
     n_trial_wraps = float(np.max(bperp_full) - np.min(bperp_full)) * max_K / (2.0 * math.pi)
-    time_win = float(_mat_scalar(parms_raw.get("unwrap_time_win", 36.0), 36.0))
+    time_win = float(_mat_scalar(parms_raw.get("unwrap_time_win", 730.0), 730.0))
     edgs = np.asarray(uw_interp.get("edgs"), dtype=np.float64)
     G, _dph_space, _dph_smooth_ifg, dph_noise, dph_space_uw = _compute_active_single_master_uw_space_time(
         uw_ph,
