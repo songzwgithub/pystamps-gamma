@@ -14,7 +14,7 @@ const DEFAULT_CLAP_WIN: f64 = 32.0;
 const DEFAULT_CLAP_LOW_PASS_WAVELENGTH: f64 = 800.0;
 const DEFAULT_CLAP_ALPHA: f64 = 1.0;
 const DEFAULT_CLAP_BETA: f64 = 0.3;
-const DEFAULT_MAX_TOPO_ERR: f64 = 20.0;
+const DEFAULT_MAX_TOPO_ERR: f64 = 15.0;
 const DEFAULT_LAMBDA_M: f64 = 0.0555;
 const DEFAULT_MEAN_INCIDENCE: f64 = 23.0_f64.to_radians();
 const COH_BIN_COUNT: usize = 100;
@@ -150,8 +150,8 @@ impl Default for Stage2Parms {
         Self {
             small_baseline_flag: "n".to_string(),
             filter_weighting: "P-square".to_string(),
-            gamma_change_convergence: 0.005,
-            gamma_max_iterations: 3,
+            gamma_change_convergence: 1.0e-4,
+            gamma_max_iterations: 25,
         }
     }
 }

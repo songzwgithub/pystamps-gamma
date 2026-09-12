@@ -343,14 +343,12 @@ def _write_root_metadata(
         "filter_grid_size": 50.0,
         "quick_est_gamma_flag": "y",
         "select_reest_gamma_flag": "y",
-        "gamma_change_convergence": 0.005,
-        "gamma_max_iterations": 3.0,
         "clap_win": 32.0,
         "clap_low_pass_wavelength": 800.0,
         "clap_alpha": 1.0,
         "clap_beta": 0.3,
-        "max_topo_err": 20.0,
-        "select_method": "DENSITY",
+        "max_topo_err": 15.0,
+        "select_method": "PERCENT",
         "percent_rand": 1.0,
         "density_rand": 2.0,
         "drop_ifg_index": np.empty(
@@ -360,15 +358,15 @@ def _write_root_metadata(
         "weed_standard_dev": np.inf,
         "weed_max_noise": np.inf,
         "weed_zero_elevation": "n",
-        "weed_neighbours": "n",
+        "weed_neighbours": "y",
         "gamma_stdev_reject": 0.0,
         "slc_osf": 1.0,
         "weed_time_win": 730.0,
         "gamma_reference_date": (
             time_axis.master_date
         ),
-        "range_looks": float(config.range_looks or 1),
-        "azimuth_looks": float(config.azimuth_looks or 1),
+        "range_looks": float(radar_geometry.range_looks),
+        "azimuth_looks": float(radar_geometry.azimuth_looks),
     }
 
     if config.reference_lon is not None:
