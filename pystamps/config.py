@@ -237,6 +237,55 @@ class GacosConfig:
             )
 
 
+# === POST_UNWRAP_DERAMP_CONFIG_V1 ===
+@dataclass(slots=True)
+class PostUnwrapDerampConfig:
+    enabled: bool = False
+
+    # Remove only the time-linear evolution of 2-D spatial gradients.
+    # Per-epoch intercepts are preserved.
+    mode: str = "linear_spacetime"
+
+    rebuild: bool = False
+    max_representatives: int = 5000
+    min_representatives: int = 200
+    robust_clip_sigma: float = 3.5
+    robust_iterations: int = 8
+    chunk_ps: int = 4096
+
+    def __post_init__(self) -> None:
+        self.mode = str(self.mode).strip().lower()
+        if self.mode != "linear_spacetime":
+            raise ConfigError(
+                "post_unwrap_deramp.mode must be linear_spacetime"
+            )
+        if int(self.max_representatives) < 10:
+            raise ConfigError(
+                "post_unwrap_deramp.max_representatives must be >= 10"
+            )
+        if int(self.min_representatives) < 10:
+            raise ConfigError(
+                "post_unwrap_deramp.min_representatives must be >= 10"
+            )
+        if int(self.min_representatives) > int(self.max_representatives):
+            raise ConfigError(
+                "post_unwrap_deramp.min_representatives must not exceed "
+                "max_representatives"
+            )
+        if float(self.robust_clip_sigma) <= 0:
+            raise ConfigError(
+                "post_unwrap_deramp.robust_clip_sigma must be positive"
+            )
+        if int(self.robust_iterations) <= 0:
+            raise ConfigError(
+                "post_unwrap_deramp.robust_iterations must be positive"
+            )
+        if int(self.chunk_ps) <= 0:
+            raise ConfigError(
+                "post_unwrap_deramp.chunk_ps must be positive"
+            )
+
+
 # === ENGINEERING_POSTPROCESS_CONFIG_V1 ===
 @dataclass(slots=True)
 class PostprocessConfig:
@@ -252,6 +301,11 @@ class PostprocessConfig:
     timeseries_shapefile: bool = True
     geotiff: bool = True
     grid_resolution_m: float = 100.0
+
+    # QGIS delivery: one GeoPackage point layer with all acquisition dates.
+    geopackage: bool = False
+    geopackage_filename: str = "insar_all_epochs.gpkg"
+    geopackage_chunk_rows: int = 500
 
     # === VERTICAL_CONVERSION_CONFIG_V1 ===
     # LOS -> vertical conversion. Horizontal motion is assumed negligible.
@@ -277,6 +331,14 @@ class PostprocessConfig:
         if float(self.grid_resolution_m) <= 0:
             raise ConfigError(
                 "postprocess.grid_resolution_m must be positive"
+            )
+        if int(self.geopackage_chunk_rows) <= 0:
+            raise ConfigError(
+                "postprocess.geopackage_chunk_rows must be positive"
+            )
+        if not str(self.geopackage_filename).strip().lower().endswith(".gpkg"):
+            raise ConfigError(
+                "postprocess.geopackage_filename must end with .gpkg"
             )
 
         self.vertical_incidence_source = str(
@@ -364,6 +426,9 @@ class RunConfig:
     ifg_selection: IFGSelectionConfig = field(default_factory=IFGSelectionConfig)
     tools: ExternalToolsConfig = field(default_factory=ExternalToolsConfig)
     gacos: GacosConfig = field(default_factory=GacosConfig)
+    post_unwrap_deramp: PostUnwrapDerampConfig = field(
+        default_factory=PostUnwrapDerampConfig
+    )
     postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     compat: CompatibilityConfig = field(default_factory=CompatibilityConfig)
@@ -531,6 +596,9 @@ def load_config(path: str | Path | None = None) -> RunConfig:
 
     tools = ExternalToolsConfig(**_as_dict(raw, "tools"))
     gacos = GacosConfig(**_as_dict(raw, "gacos"))
+    post_unwrap_deramp = PostUnwrapDerampConfig(
+        **_as_dict(raw, "post_unwrap_deramp")
+    )
     postprocess = PostprocessConfig(**_as_dict(raw, "postprocess"))
     reference = ReferenceConfig(**_as_dict(raw, "reference"))
     compat = CompatibilityConfig(**_as_dict(raw, "compat"))
@@ -539,6 +607,7 @@ def load_config(path: str | Path | None = None) -> RunConfig:
         tolerance=tolerance,
         tools=tools,
         gacos=gacos,
+        post_unwrap_deramp=post_unwrap_deramp,
         postprocess=postprocess,
         reference=reference,
         compat=compat,

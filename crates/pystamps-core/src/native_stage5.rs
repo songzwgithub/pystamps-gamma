@@ -245,13 +245,32 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
     let parms = load_stage5_parms(dataset_root)?;
     let mut bundles = Vec::with_capacity(patch_dirs.len());
     for patch in &patch_dirs {
+        // A Stage-5 patch is allowed to promote zero PS. The patch stage
+        // writes a structurally valid ps2.mat with n_ps=0 in that case.
+        // Such a patch contributes no rows to merged products and must be
+        // skipped rather than treated as a malformed patch.
+        let ps2 = read_mat_stage5(patch, "ps2.mat")?;
+        let n_ps_values = optional_vector_f64(&ps2, "n_ps").ok_or_else(|| {
+            let patch_name = patch
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("<unknown>");
+            stage5_err_owned(format!("{patch_name}/ps2.mat missing n_ps"))
+        })?;
+        let n_ps = n_ps_values.first().copied().unwrap_or(0.0).round() as usize;
+
+        if n_ps == 0 {
+            continue;
+        }
+
         bundles.push(load_stage5_patch_bundle(patch)?);
     }
 
-    let incidence_bundle_count = bundles
-        .iter()
-        .filter(|bundle| bundle.inc.is_some())
-        .count();
+    if bundles.is_empty() {
+        return stage5_err("All Stage-5 patch outputs contain zero PS");
+    }
+
+    let incidence_bundle_count = bundles.iter().filter(|bundle| bundle.inc.is_some()).count();
     if incidence_bundle_count != 0 && incidence_bundle_count != bundles.len() {
         return stage5_err(format!(
             "Per-PS incidence artifact inc2.mat is present in only {incidence_bundle_count}/{} patches",
@@ -432,10 +451,7 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
     let merged_mean_incidence = if inc_selected.is_empty() {
         None
     } else {
-        Some(
-            inc_selected.iter().copied().sum::<f64>()
-                / inc_selected.len() as f64,
-        )
+        Some(inc_selected.iter().copied().sum::<f64>() / inc_selected.len() as f64)
     };
 
     write_merged_ps2(
@@ -482,12 +498,10 @@ pub fn run_stage5_merge_native(dataset_root: impl AsRef<Path>) -> Result<String,
             ));
         }
         if inc_selected.iter().any(|value| {
-            !value.is_finite()
-                || *value <= 0.0
-                || *value >= std::f64::consts::FRAC_PI_2
+            !value.is_finite() || *value <= 0.0 || *value >= std::f64::consts::FRAC_PI_2
         }) {
             return stage5_err(
-                "Merged inc2.inc contains invalid incidence angle outside (0, pi/2)"
+                "Merged inc2.inc contains invalid incidence angle outside (0, pi/2)",
             );
         }
         let mut inc2 = MatFile::new(dataset_root.join("inc2.mat"));
@@ -748,10 +762,8 @@ fn compute_patch_keep_mask(
             let col = row[1].round() as i64;
             let line = row[2].round() as i64;
             // patch_noover.in and ps*.ij are both one-based inclusive.
-            keep_patch[idx] = col >= col_min
-                && col <= col_max
-                && line >= row_min
-                && line <= row_max;
+            keep_patch[idx] =
+                col >= col_min && col <= col_max && line >= row_min && line <= row_max;
         }
     }
 
@@ -781,10 +793,7 @@ fn load_stage5_parms(patch_dir: &Path) -> Result<Stage5Parms, CoreError> {
     })?;
 
     let mat = MatData::read(&path).map_err(|err| {
-        stage5_err_owned(format!(
-            "unable to read required {}: {err}",
-            path.display()
-        ))
+        stage5_err_owned(format!("unable to read required {}: {err}", path.display()))
     })?;
 
     Ok(Stage5Parms {
@@ -826,8 +835,7 @@ fn write_merged_ps2(
     ps2.add_f64_scalar("n_ps", n_ps as f64)?;
     ps2.add_f32_matrix("xy", n_ps, 3, xy.to_vec())?;
     let mean_incidence = mean_incidence_override.or_else(|| {
-        optional_vector_f64(base_ps, "mean_incidence")
-            .and_then(|values| values.first().copied())
+        optional_vector_f64(base_ps, "mean_incidence").and_then(|values| values.first().copied())
     });
     if let Some(mean_incidence) = mean_incidence {
         ps2.add_f64_scalar("mean_incidence", mean_incidence)?;

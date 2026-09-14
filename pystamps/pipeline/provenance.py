@@ -318,6 +318,7 @@ def _stage_config(
             "snaphu": run_config.tools.snaphu,
         }
         config["gacos"] = run_config.gacos
+        config["post_unwrap_deramp"] = run_config.post_unwrap_deramp
 
     config["compat"] = run_config.compat
     return _json_safe(config)

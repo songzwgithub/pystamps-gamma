@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Any
 
 import numpy as np
@@ -85,8 +86,133 @@ def read_mat(path: str | Path) -> dict[str, Any]:
     return {k: v for k, v in payload.items() if not k.startswith("__")}
 
 
+# === LARGE_MAT_HDF5_FALLBACK_V1 ===
+_MAT_V5_MAX_BYTES = (1 << 32) - 1
+_PYSTAMPS_ROW_MAJOR_ATTR = "PY_STAMPS_row_major"
+_H5_COMPLEX64 = np.dtype([("real", "<f4"), ("imag", "<f4")])
+_H5_COMPLEX128 = np.dtype([("real", "<f8"), ("imag", "<f8")])
+
+
+def _payload_nbytes(value: Any) -> int:
+    if sparse.issparse(value):
+        return int(value.data.nbytes + value.indices.nbytes + value.indptr.nbytes)
+    try:
+        return int(np.asarray(value).nbytes)
+    except Exception:
+        return 0
+
+
+def _large_mat_requires_hdf5(payload: dict[str, Any]) -> bool:
+    total = 0
+    for value in payload.values():
+        nbytes = _payload_nbytes(value)
+        total += nbytes
+        if nbytes > _MAT_V5_MAX_BYTES:
+            return True
+    return total > _MAT_V5_MAX_BYTES
+
+
+def _h5_row_chunk(rows: int, cols: int, itemsize: int) -> int:
+    if rows <= 0:
+        return 1
+    row_bytes = max(1, int(cols) * int(itemsize))
+    return max(1, min(int(rows), (16 * 1024 * 1024) // row_bytes))
+
+
+def _h5_write_numeric_dataset(h5: Any, name: str, value: Any) -> None:
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        arr = arr.reshape(1, 1)
+    elif arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+
+    if np.iscomplexobj(arr):
+        compound = _H5_COMPLEX64 if arr.dtype.itemsize <= 8 else _H5_COMPLEX128
+        real_dtype = np.float32 if compound == _H5_COMPLEX64 else np.float64
+        shape = arr.shape
+        if arr.ndim == 2 and shape[0] > 0 and shape[1] > 0:
+            cr = _h5_row_chunk(shape[0], shape[1], compound.itemsize)
+            ds = h5.create_dataset(
+                name, shape=shape, dtype=compound,
+                chunks=(min(cr, shape[0]), shape[1]),
+            )
+            for start in range(0, shape[0], cr):
+                stop = min(shape[0], start + cr)
+                z = np.asarray(arr[start:stop, :])
+                tmp = np.empty(z.shape, dtype=compound)
+                tmp["real"] = z.real.astype(real_dtype, copy=False)
+                tmp["imag"] = z.imag.astype(real_dtype, copy=False)
+                ds[start:stop, :] = tmp
+        else:
+            z = np.asarray(arr)
+            tmp = np.empty(z.shape, dtype=compound)
+            tmp["real"] = z.real.astype(real_dtype, copy=False)
+            tmp["imag"] = z.imag.astype(real_dtype, copy=False)
+            ds = h5.create_dataset(name, data=tmp)
+    else:
+        if arr.dtype.kind in {"U", "S"}:
+            text = "".join(str(x) for x in arr.reshape(-1))
+            ds = h5.create_dataset(name, data=np.bytes_(text))
+        elif arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] > 0:
+            cr = _h5_row_chunk(arr.shape[0], arr.shape[1], arr.dtype.itemsize)
+            ds = h5.create_dataset(
+                name, shape=arr.shape, dtype=arr.dtype,
+                chunks=(min(cr, arr.shape[0]), arr.shape[1]),
+            )
+            for start in range(0, arr.shape[0], cr):
+                stop = min(arr.shape[0], start + cr)
+                ds[start:stop, :] = arr[start:stop, :]
+        else:
+            ds = h5.create_dataset(name, data=arr)
+
+    ds.attrs[_PYSTAMPS_ROW_MAJOR_ATTR] = np.asarray(1, dtype=np.uint8)
+
+
+def _write_large_hdf5_mat(path: Path, payload: dict[str, Any]) -> None:
+    import h5py  # type: ignore
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+
+    try:
+        with h5py.File(tmp, "w") as h5:
+            for name, value in payload.items():
+                if sparse.issparse(value):
+                    csc = value.tocsc()
+                    grp = h5.create_group(name)
+                    grp.create_dataset("data", data=csc.data)
+                    grp.create_dataset("ir", data=csc.indices.astype(np.int32, copy=False))
+                    grp.create_dataset("jc", data=csc.indptr.astype(np.int32, copy=False))
+                    grp.create_dataset("shape", data=np.asarray(csc.shape, dtype=np.int64))
+                    continue
+
+                arr = np.asarray(value)
+                if arr.dtype.kind == "O":
+                    raise MatReadError(
+                        f"Large HDF5 MAT fallback does not support object variable '{name}'"
+                    )
+                _h5_write_numeric_dataset(h5, name, arr)
+
+            h5.flush()
+
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def write_mat(path: str | Path, payload: dict[str, Any]) -> None:
-    savemat(Path(path), payload)
+    mat_path = Path(path)
+    if _large_mat_requires_hdf5(payload):
+        _write_large_hdf5_mat(mat_path, payload)
+        return
+    savemat(mat_path, payload)
 
 # === STAGE3_FAST_SELECTIVE_MAT_V1 ===
 def read_mat_variables(

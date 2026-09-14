@@ -9841,6 +9841,22 @@ def stage5_merge_and_ifgstd(
 
     from pystamps.native import native_binary_command
 
+    # === STAGE5_LOWMEM_STREAMING_DISPATCH_V1 ===
+    # Stream one patch at a time for large SBAS stacks.
+    if os.environ.get(
+        "PYSTAMPS_STAGE5_LOWMEM",
+        "1",
+    ).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        from pystamps.pipeline.stage5_lowmem import (
+            stage5_merge_lowmem,
+        )
+        return stage5_merge_lowmem(dataset_root)
+
     command, command_cwd = native_binary_command()
 
     full_command = [

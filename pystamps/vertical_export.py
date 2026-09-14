@@ -147,11 +147,15 @@ def _vertical_factor(
     factor = 1.0 / cos_i
     positive = str(positive).strip().lower()
 
+    # pySTAMPS LOS convention is positive away from the satellite.
+    # Neglecting horizontal deformation:
+    #   vertical_up   = -LOS / cos(incidence)
+    #   vertical_down = +LOS / cos(incidence)
     if positive == "up":
-        return factor
+        return -factor
 
     if positive == "down":
-        return -factor
+        return factor
 
     raise VerticalExportError(
         "vertical_positive must be up or down"
@@ -527,7 +531,7 @@ def run_vertical_export(
             compression_opts=1,
         )
         dst.attrs["formula"] = (
-            "vertical_up = LOS / cos(incidence); "
+            "vertical_up = -LOS / cos(incidence); "
             "horizontal deformation neglected"
         )
         dst.attrs["incidence_source"] = incidence_used
@@ -708,7 +712,7 @@ def run_vertical_export(
             "horizontal deformation is negligible"
         ),
         "formula": (
-            "vertical_up = LOS / cos(incidence)"
+            "vertical_up = -LOS / cos(incidence)"
         ),
         "positive_direction": positive,
         "incidence_source": incidence_used,
@@ -773,7 +777,7 @@ def main() -> None:
 
     ap.add_argument(
         "--incidence-source",
-        choices=("auto", "la2", "constant"),
+        choices=("auto", "inc2", "constant"),
         default="auto",
     )
 

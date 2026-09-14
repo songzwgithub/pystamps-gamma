@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future
+from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import dataclass
 from pathlib import Path
 import json
@@ -366,34 +366,59 @@ def _resolve_stage78_phase_file(
     if context.stage78_phase_file is not None:
         return context.stage78_phase_file
 
+    # Build one deterministic final phase product for Stage 7/8.
+    #
+    # Order when both corrections are enabled:
+    #   phuw2.mat -> GACOS -> post-unwrapping deramp
+    #
+    # Atmospheric delay is corrected first. The deramp then removes only
+    # the residual time-linear long-wavelength spatial gradient.
+    selected = "phuw2.mat"
+
     gacos = context.run_config.gacos
-
-    if not bool(gacos.enabled):
-        selected = "phuw2.mat"
-
-    elif context.dry_run:
-        # Dry-run must not create atmospheric products.
-        selected = "phuw2_gacos.mat"
-
-    else:
-        # Lazy import: ordinary non-GACOS runs never enter
-        # the atmospheric correction module.
-        from pystamps.pipeline.gacos_correction import (
-            ensure_gacos_corrected_phuw,
-        )
-
-        corrected = ensure_gacos_corrected_phuw(
-            dataset_root,
-            gacos,
-        )
-
-        if corrected.parent != dataset_root.resolve():
-            raise StageExecutionError(
-                "GACOS corrected phase was created outside "
-                "the dataset root"
+    if bool(gacos.enabled):
+        if context.dry_run:
+            selected = "phuw2_gacos.mat"
+        else:
+            from pystamps.pipeline.gacos_correction import (
+                ensure_gacos_corrected_phuw,
             )
 
-        selected = corrected.name
+            corrected = ensure_gacos_corrected_phuw(
+                dataset_root,
+                gacos,
+            )
+
+            if corrected.parent != dataset_root.resolve():
+                raise StageExecutionError(
+                    "GACOS corrected phase was created outside "
+                    "the dataset root"
+                )
+
+            selected = corrected.name
+
+    deramp = context.run_config.post_unwrap_deramp
+    if bool(deramp.enabled):
+        if context.dry_run:
+            p = Path(selected)
+            selected = f"{p.stem}_deramp{p.suffix or '.mat'}"
+        else:
+            from pystamps.pipeline.post_unwrap_deramp import (
+                ensure_post_unwrap_deramped_phase,
+            )
+
+            corrected = ensure_post_unwrap_deramped_phase(
+                dataset_root,
+                deramp,
+                input_phase_file=selected,
+            )
+
+            if corrected.parent != dataset_root.resolve():
+                raise StageExecutionError(
+                    "Deramped phase was created outside the dataset root"
+                )
+
+            selected = corrected.name
 
     context.stage78_phase_file = selected
     return selected
@@ -1054,6 +1079,16 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
     patch_count = len(dataset.patches)
     merged_stage5 = StageDef(5, "Merge patches", "merged")
 
+    def _fmt_duration(seconds: float) -> str:
+        seconds = max(0.0, float(seconds))
+        if seconds < 60.0:
+            return f"{seconds:.1f}s"
+        minutes, sec = divmod(int(round(seconds)), 60)
+        if minutes < 60:
+            return f"{minutes:d}m{sec:02d}s"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:d}h{minutes:02d}m"
+
     with HybridExecutor(
         io_workers=context.run_config.runtime.io_workers,
         cpu_workers=context.run_config.runtime.cpu_workers,
@@ -1061,38 +1096,117 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
         for stage in _selected_stages(context.start_step, context.end_step):
             task_kind = _task_kind_for_stage(stage, context, patch_count=patch_count)
             if stage.scope == "patch":
+                stage_total = len(dataset.patches)
+                stage_started = time.perf_counter()
+
+                print(
+                    f"\n[STAGE{stage.stage_id}] {stage.name}: "
+                    f"{stage_total} patch(es), task_kind={task_kind}",
+                    flush=True,
+                )
+
                 if _stage2_uses_full_cpu_default(stage, context):
-                    for patch_dir in dataset.patches:
+                    for patch_index, patch_dir in enumerate(dataset.patches, start=1):
+                        print(
+                            f"[STAGE{stage.stage_id}] START "
+                            f"{patch_index}/{stage_total} {patch_dir.name}",
+                            flush=True,
+                        )
                         try:
-                            report.add(_run_patch_stage_timed(stage, patch_dir, context, patch_count))
+                            result = _run_patch_stage_timed(
+                                stage, patch_dir, context, patch_count
+                            )
                         except Exception as exc:  # pragma: no cover
-                            report.add(
-                                StageResult(
+                            result = StageResult(
+                                stage_id=stage.stage_id,
+                                scope="patch",
+                                target=patch_dir.name,
+                                status="failed",
+                                details=str(exc),
+                            )
+                        report.add(result)
+                        elapsed = time.perf_counter() - stage_started
+                        mean_per_patch = elapsed / patch_index
+                        eta = mean_per_patch * (stage_total - patch_index)
+                        pct = 100.0 * patch_index / max(1, stage_total)
+                        print(
+                            f"[STAGE{stage.stage_id}] "
+                            f"{patch_index}/{stage_total} ({pct:6.2f}%) "
+                            f"{patch_dir.name} {result.status} | "
+                            f"patch={_fmt_duration(result.duration_sec or 0.0)} | "
+                            f"elapsed={_fmt_duration(elapsed)} | "
+                            f"ETA={_fmt_duration(eta)}",
+                            flush=True,
+                        )
+
+                else:
+                    future_to_patch: dict[Future, Path] = {}
+                    for patch_dir in dataset.patches:
+                        fut = executor.submit(
+                            task_kind,
+                            _run_patch_stage_timed,
+                            stage,
+                            patch_dir,
+                            context,
+                            patch_count,
+                        )
+                        future_to_patch[fut] = patch_dir
+
+                    pending = set(future_to_patch)
+                    completed = 0
+                    results_by_name: dict[str, StageResult] = {}
+                    heartbeat_interval = 60.0
+
+                    while pending:
+                        done, pending = wait(
+                            pending,
+                            timeout=heartbeat_interval,
+                            return_when=FIRST_COMPLETED,
+                        )
+                        if not done:
+                            elapsed = time.perf_counter() - stage_started
+                            active = sum(1 for fut in pending if fut.running())
+                            queued = len(pending) - active
+                            pct = 100.0 * completed / max(1, stage_total)
+                            print(
+                                f"[STAGE{stage.stage_id}] HEARTBEAT "
+                                f"{completed}/{stage_total} ({pct:6.2f}%) | "
+                                f"active={active} queued={queued} | "
+                                f"elapsed={_fmt_duration(elapsed)}",
+                                flush=True,
+                            )
+                            continue
+
+                        for fut in done:
+                            patch_dir = future_to_patch[fut]
+                            try:
+                                result = fut.result()
+                            except Exception as exc:  # pragma: no cover
+                                result = StageResult(
                                     stage_id=stage.stage_id,
                                     scope="patch",
                                     target=patch_dir.name,
                                     status="failed",
                                     details=str(exc),
                                 )
+                            results_by_name[patch_dir.name] = result
+                            completed += 1
+                            elapsed = time.perf_counter() - stage_started
+                            mean_per_patch = elapsed / completed
+                            eta = mean_per_patch * (stage_total - completed)
+                            pct = 100.0 * completed / max(1, stage_total)
+                            print(
+                                f"[STAGE{stage.stage_id}] "
+                                f"{completed}/{stage_total} ({pct:6.2f}%) "
+                                f"{patch_dir.name} {result.status} | "
+                                f"patch={_fmt_duration(result.duration_sec or 0.0)} | "
+                                f"elapsed={_fmt_duration(elapsed)} | "
+                                f"ETA={_fmt_duration(eta)}",
+                                flush=True,
                             )
-                else:
-                    futures: list[Future] = [
-                        executor.submit(task_kind, _run_patch_stage_timed, stage, patch_dir, context, patch_count)
-                        for patch_dir in dataset.patches
-                    ]
-                    for fut in futures:
-                        try:
-                            report.add(fut.result())
-                        except Exception as exc:  # pragma: no cover
-                            report.add(
-                                StageResult(
-                                    stage_id=stage.stage_id,
-                                    scope="patch",
-                                    target="unknown",
-                                    status="failed",
-                                    details=str(exc),
-                                )
-                            )
+
+                    for patch_dir in dataset.patches:
+                        report.add(results_by_name[patch_dir.name])
                 if stage.stage_id == 5 and context.end_step >= 5:
                     try:
                         result = _run_merged_stage_timed(merged_stage5, dataset.root, context)

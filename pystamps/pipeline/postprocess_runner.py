@@ -98,6 +98,46 @@ def run_engineering_postprocess(
             f"Engineering export failed with exit code {exported.returncode}"
         )
 
+    # === QGIS_GEOPACKAGE_RUNNER_V1 ===
+    if config.geopackage:
+        qgis_cmd = [
+            sys.executable,
+            "-m",
+            "pystamps.qgis_export",
+            "--dataset-root",
+            str(root),
+            "--output-root",
+            str(output_root),
+            "--filename",
+            str(config.geopackage_filename),
+            "--chunk-rows",
+            str(int(config.geopackage_chunk_rows)),
+        ]
+
+        if config.vertical_enabled:
+            qgis_cmd.append("--vertical")
+            qgis_cmd.extend(
+                [
+                    "--vertical-positive",
+                    str(config.vertical_positive),
+                ]
+            )
+
+        print()
+        print("[POSTPROCESS] QGIS all-epoch GeoPackage")
+
+        qgis = subprocess.run(
+            qgis_cmd,
+            check=False,
+            text=True,
+        )
+
+        if qgis.returncode != 0:
+            raise EngineeringPostprocessError(
+                "QGIS GeoPackage export failed with "
+                f"exit code {qgis.returncode}"
+            )
+
     # === VERTICAL_CONVERSION_RUNNER_V1 ===
     if config.vertical_enabled:
         vertical_cmd = [
