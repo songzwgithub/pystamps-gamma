@@ -522,7 +522,7 @@ fn argmax_first(values: &[f64]) -> usize {
     best_ix
 }
 
-const STAGE2_TOPOFIT_NEAR_MAX_COH_TOL: f64 = 5.0e-3;
+const STAGE2_TOPOFIT_NEAR_MAX_COH_TOL: f64 = 2.0e-4;
 
 fn near_max_trial_indices(coh_trial: &[f64]) -> Vec<usize> {
     if coh_trial.len() <= 1 {

@@ -1178,8 +1178,45 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                         )
 
                 else:
+                    configured_active = _configured_cpu_workers(context)
+                    stage_active_limit = configured_active
+
+                    if stage.stage_id == 2:
+                        stage2_threads = _effective_stage2_native_threads(
+                            stage,
+                            context,
+                            patch_count,
+                            stage2_kernel_backend=(
+                                context.run_config.runtime.stage2_kernel_backend
+                            ),
+                        )
+
+                        if stage2_threads > 0:
+                            cpu_budget = max(1, os.cpu_count() or 1)
+                            stage_active_limit = min(
+                                configured_active,
+                                max(1, cpu_budget // stage2_threads),
+                            )
+
+                        print(
+                            "[STAGE2] CPU budget scheduler: "
+                            f"cpu={os.cpu_count() or 1}, "
+                            f"configured_workers={configured_active}, "
+                            f"native_threads={stage2_threads}, "
+                            f"active_limit={stage_active_limit}",
+                            flush=True,
+                        )
+
+                    patch_iter = iter(dataset.patches)
                     future_to_patch: dict[Future, Path] = {}
-                    for patch_dir in dataset.patches:
+                    pending: set[Future] = set()
+
+                    def _submit_next_patch() -> bool:
+                        try:
+                            patch_dir = next(patch_iter)
+                        except StopIteration:
+                            return False
+
                         fut = executor.submit(
                             task_kind,
                             _run_patch_stage_timed,
@@ -1189,22 +1226,32 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                             patch_count,
                         )
                         future_to_patch[fut] = patch_dir
+                        pending.add(fut)
+                        return True
 
-                    pending = set(future_to_patch)
+                    for _ in range(min(stage_active_limit, stage_total)):
+                        if not _submit_next_patch():
+                            break
+
                     completed = 0
                     results_by_name: dict[str, StageResult] = {}
                     heartbeat_interval = 60.0
 
                     while pending:
-                        done, pending = wait(
+                        done, still_pending = wait(
                             pending,
                             timeout=heartbeat_interval,
                             return_when=FIRST_COMPLETED,
                         )
+                        pending = set(still_pending)
+
                         if not done:
                             elapsed = time.perf_counter() - stage_started
                             active = sum(1 for fut in pending if fut.running())
-                            queued = len(pending) - active
+                            queued = max(
+                                0,
+                                stage_total - completed - len(pending),
+                            )
                             pct = 100.0 * completed / max(1, stage_total)
                             print(
                                 f"[STAGE{stage.stage_id}] HEARTBEAT "
@@ -1227,12 +1274,14 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                                     status="failed",
                                     details=str(exc),
                                 )
+
                             results_by_name[patch_dir.name] = result
                             completed += 1
                             elapsed = time.perf_counter() - stage_started
                             mean_per_patch = elapsed / completed
                             eta = mean_per_patch * (stage_total - completed)
                             pct = 100.0 * completed / max(1, stage_total)
+
                             print(
                                 f"[STAGE{stage.stage_id}] "
                                 f"{completed}/{stage_total} ({pct:6.2f}%) "
@@ -1242,6 +1291,8 @@ def run_pipeline(context: PipelineContext) -> PipelineReport:
                                 f"ETA={_fmt_duration(eta)}",
                                 flush=True,
                             )
+
+                            _submit_next_patch()
 
                     for patch_dir in dataset.patches:
                         report.add(results_by_name[patch_dir.name])

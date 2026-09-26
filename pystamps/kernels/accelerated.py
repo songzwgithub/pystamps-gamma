@@ -335,9 +335,59 @@ def _stage2_topofit_native(
         row0 = np.ascontiguousarray(bperp_arr[0], dtype=bperp_arr.dtype)
         if np.array_equal(bperp_arr, np.broadcast_to(row0, bperp_arr.shape)):
             return _stage2_topofit_row_invariant_native(cpxphase, row0, n_trial_wraps, threads)
-    cpx_arr = np.asarray(cpxphase)
-    # Keep the generic path exact until the compiled solver reaches Python parity.
-    return _stage2_topofit_python(cpx_arr, bperp_arr, n_trial_wraps, threads)
+    cpx_arr = np.ascontiguousarray(
+        np.asarray(cpxphase, dtype=np.complex128)
+    )
+    bp_arr = np.ascontiguousarray(
+        np.asarray(bperp_arr, dtype=np.float64)
+    )
+
+    n_row, n_col = cpx_arr.shape
+    k = np.empty(n_row, dtype=np.float64)
+    c = np.empty(n_row, dtype=np.float64)
+    coh = np.empty(n_row, dtype=np.float64)
+    residual = np.empty(
+        (n_row, n_col),
+        dtype=np.complex64,
+    )
+
+    # V3.3 generic/per-PS hybrid:
+    # complete rows use the compiled Rayon solver;
+    # rows with missing IFGs retain the authoritative Python path.
+    complete = np.all(cpx_arr != 0, axis=1)
+
+    if np.any(complete):
+        payload = native_mod.ps_topofit_batch_generic(
+            np.ascontiguousarray(cpx_arr[complete]),
+            np.ascontiguousarray(bp_arr[complete]),
+            float(n_trial_wraps),
+            _native_threads(threads),
+        )
+        k[complete] = np.asarray(payload[0], dtype=np.float64)
+        c[complete] = np.asarray(payload[1], dtype=np.float64)
+        coh[complete] = np.asarray(payload[2], dtype=np.float64)
+        residual[complete, :] = np.asarray(
+            payload[3],
+            dtype=np.complex64,
+        )
+
+    incomplete = ~complete
+    if np.any(incomplete):
+        py = _stage2_topofit_python(
+            cpx_arr[incomplete],
+            bp_arr[incomplete],
+            n_trial_wraps,
+            threads,
+        )
+        k[incomplete] = np.asarray(py[0], dtype=np.float64)
+        c[incomplete] = np.asarray(py[1], dtype=np.float64)
+        coh[incomplete] = np.asarray(py[2], dtype=np.float64)
+        residual[incomplete, :] = np.asarray(
+            py[3],
+            dtype=np.complex64,
+        )
+
+    return k, c, coh, residual
 
 
 def _stage2_topofit_row_invariant_python(
@@ -359,9 +409,64 @@ def _stage2_topofit_row_invariant_native(
     native_mod = _load_stage2_native_module()
     if native_mod is None:
         raise BackendUnavailableError("Native stage-2 extension is unavailable")
-    # Keep explicit native requests exact until the compiled row-invariant solver
-    # reaches Python parity again.
-    return _stage2_topofit_row_invariant_python(cpxphase, bperp, n_trial_wraps, threads)
+
+    cpx_arr = np.ascontiguousarray(
+        np.asarray(cpxphase, dtype=np.complex128)
+    )
+    bp_vec, _ = _stage2_row_invariant_bperp_matrix(
+        bperp,
+        cpx_arr.shape[0],
+    )
+    bp_vec = np.ascontiguousarray(
+        np.asarray(bp_vec, dtype=np.float64).reshape(-1)
+    )
+
+    n_row, n_col = cpx_arr.shape
+    k = np.empty(n_row, dtype=np.float64)
+    c = np.empty(n_row, dtype=np.float64)
+    coh = np.empty(n_row, dtype=np.float64)
+    residual = np.empty(
+        (n_row, n_col),
+        dtype=np.complex64,
+    )
+
+    # The precomputed native basis uses the full bperp range. Python's
+    # reference solver recomputes bperp_range after dropping zero IFGs.
+    # Therefore only completely observed rows are safe for the native basis.
+    complete = np.all(cpx_arr != 0, axis=1)
+
+    if np.any(complete):
+        payload = native_mod.ps_topofit_batch_row_invariant(
+            np.ascontiguousarray(cpx_arr[complete]),
+            bp_vec,
+            float(n_trial_wraps),
+            _native_threads(threads),
+        )
+        k[complete] = np.asarray(payload[0], dtype=np.float64)
+        c[complete] = np.asarray(payload[1], dtype=np.float64)
+        coh[complete] = np.asarray(payload[2], dtype=np.float64)
+        residual[complete, :] = np.asarray(
+            payload[3],
+            dtype=np.complex64,
+        )
+
+    incomplete = ~complete
+    if np.any(incomplete):
+        py = _stage2_topofit_row_invariant_python(
+            cpx_arr[incomplete],
+            bp_vec,
+            n_trial_wraps,
+            threads,
+        )
+        k[incomplete] = np.asarray(py[0], dtype=np.float64)
+        c[incomplete] = np.asarray(py[1], dtype=np.float64)
+        coh[incomplete] = np.asarray(py[2], dtype=np.float64)
+        residual[incomplete, :] = np.asarray(
+            py[3],
+            dtype=np.complex64,
+        )
+
+    return k, c, coh, residual
 
 
 def _stage2_topofit_coh_row_invariant_python(
@@ -386,7 +491,52 @@ def _stage2_topofit_coh_row_invariant_native(
     native_mod = _load_stage2_native_module()
     if native_mod is None:
         raise BackendUnavailableError("Native stage-2 extension is unavailable")
-    return _stage2_topofit_coh_row_invariant_python(cpxphase, bperp, n_trial_wraps, threads)
+
+    cpx_arr = np.ascontiguousarray(
+        np.asarray(cpxphase, dtype=np.complex128)
+    )
+    bp_vec, _ = _stage2_row_invariant_bperp_matrix(
+        bperp,
+        cpx_arr.shape[0],
+    )
+    bp_vec = np.ascontiguousarray(
+        np.asarray(bp_vec, dtype=np.float64).reshape(-1)
+    )
+
+    out = np.empty(
+        cpx_arr.shape[0],
+        dtype=np.float64,
+    )
+
+    # V3.4 coherence hybrid:
+    # random-hist phases are complete unit-magnitude rows, so they take
+    # the compiled path. Rows with missing IFGs retain exact Python semantics.
+    complete = np.all(
+        cpx_arr != 0,
+        axis=1,
+    )
+
+    if np.any(complete):
+        out[complete] = np.asarray(
+            native_mod.ps_topofit_coh_row_invariant(
+                np.ascontiguousarray(cpx_arr[complete]),
+                bp_vec,
+                float(n_trial_wraps),
+                _native_threads(threads),
+            ),
+            dtype=np.float64,
+        )
+
+    incomplete = ~complete
+    if np.any(incomplete):
+        out[incomplete] = _stage2_topofit_coh_row_invariant_python(
+            cpx_arr[incomplete],
+            bp_vec,
+            n_trial_wraps,
+            threads,
+        )
+
+    return out
 
 
 DEFAULT_REGISTRY.register_provider(

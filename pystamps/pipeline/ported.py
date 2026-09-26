@@ -944,10 +944,55 @@ def _stage2_grid_accumulate_matlab(
     *,
     out: np.ndarray | None = None,
     preserve_precision: bool = False,
+    backend: str = "python",
+    threads: int = 0,
 ) -> np.ndarray:
     dtype = np.complex128 if preserve_precision else np.complex64
     ph = np.asarray(ph_weight, dtype=dtype)
     grid = np.asarray(grid_lin, dtype=np.int64).reshape(-1)
+
+    # Stage-2 V2 native deterministic grid accumulation.
+    # The compiled kernel parallelizes over IFGs; within each IFG it visits
+    # PS rows in the same order as this Python/MATLAB-compatible loop.
+    if (
+        not preserve_precision
+        and str(backend).strip().lower() in {"auto", "native"}
+    ):
+        try:
+            native_result = run_stage2_grid_accumulate_kernel(
+                np.ascontiguousarray(ph, dtype=np.complex64),
+                np.ascontiguousarray(grid, dtype=np.int64),
+                int(n_i),
+                int(n_j),
+                backend=backend,
+                threads=int(threads),
+            )
+            native_result = np.asarray(
+                native_result,
+                dtype=np.complex64,
+            )
+
+            if out is not None:
+                out_arr = np.asarray(out)
+                if out_arr.shape != native_result.shape:
+                    raise PortedStageError(
+                        "stage-2 grid accumulation output buffer "
+                        "has incompatible shape"
+                    )
+                np.copyto(
+                    out_arr,
+                    native_result.astype(out_arr.dtype, copy=False),
+                    casting="unsafe",
+                )
+                return out_arr
+
+            return native_result
+
+        except BackendUnavailableError:
+            if str(backend).strip().lower() == "native":
+                raise
+            # auto backend falls through to the exact Python implementation.
+
     if out is None:
         grid_out = np.zeros((int(n_i), int(n_j), ph.shape[1]), dtype=dtype)
     else:
@@ -1893,7 +1938,9 @@ def _clap_filt_grid_stack_prepared(
             np.float64
         )
 
-        default_window_batch = 4
+        # Stage-2 V3.2: larger double-precision window batch.
+        # Window order and numerical precision are unchanged.
+        default_window_batch = 8
 
     ph_array = np.asarray(
         source,
@@ -5235,7 +5282,15 @@ def stage2_estimate_gamma(
 
     rng = _MatlabV5UniformRNG(2005)
     random_hist_t0 = time.perf_counter()
-    rand_chunk = 250
+    rand_chunk = max(
+        250,
+        int(
+            os.environ.get(
+                "PYSTAMPS_STAGE2_RANDOM_CHUNK_ROWS",
+                "4096",
+            )
+        ),
+    )
     rand_bp = bperp_nm.astype(np.float64, copy=False)
     small_baseline = parms.small_baseline_flag.lower() == "y"
     if small_baseline:
@@ -5314,7 +5369,30 @@ def stage2_estimate_gamma(
     random_hist_dt = time.perf_counter() - random_hist_t0
     Nr_base = np.asarray(Nr, dtype=np.float64).copy()
     Nr_scaled_last = Nr_base.copy()
-    clap_prepared = _prepare_clap_filt_grid_stack((n_i, n_j, n_ifg), clap_window, clap_pad, low_pass)
+
+    if _environment_flag(
+        "PYSTAMPS_STAGE2_TIMING",
+        default=True,
+    ):
+        print(
+            "[STAGE2][SETUP] "
+            f"{patch_dir.name} "
+            f"n_ps={n_ps:,} n_ifg={n_ifg} "
+            f"bperp={'row-invariant' if row_invariant_bperp else 'generic'} "
+            f"random_hist={'hit' if random_hist_cache_hit else 'build'} "
+            f"random_hist_time={random_hist_dt:.2f}s "
+            f"rand_chunk={rand_chunk} "
+            f"trial_wraps={n_trial_wraps:.6f} "
+            f"threads={native_threads_norm}",
+            flush=True,
+        )
+
+    clap_prepared = _prepare_clap_filt_grid_stack(
+        (n_i, n_j, n_ifg),
+        clap_window,
+        clap_pad,
+        low_pass,
+    )
 
     _emit_stage2(
         "setup_complete",
@@ -5442,6 +5520,10 @@ def stage2_estimate_gamma(
             n_i,
             n_j,
             out=ph_grid,
+            backend=_stage2_backend_for(
+                "stage2_grid_accumulate"
+            ),
+            threads=native_threads_norm,
         )
         grid_dt = time.perf_counter() - grid_t0
         _emit_stage2(
@@ -5536,6 +5618,21 @@ def stage2_estimate_gamma(
             N_opt[out_ix] = 1.0
             ph_res[out_ix, :] = np.angle(phase_residual).astype(np.float32)
         topofit_dt = time.perf_counter() - topofit_t0
+
+        if _environment_flag(
+            "PYSTAMPS_STAGE2_TIMING",
+            default=True,
+        ):
+            print(
+                "[STAGE2][TIMING] "
+                f"{patch_dir.name} iter={iteration} "
+                f"grid={grid_dt:.2f}s "
+                f"clap={filt_dt:.2f}s "
+                f"extract={patch_dt:.2f}s "
+                f"topofit={topofit_dt:.2f}s "
+                f"total={time.perf_counter() - iter_t0:.2f}s",
+                flush=True,
+            )
 
         gamma_change_rms = float(np.sqrt(np.sum((coh_ps - coh_ps_save) ** 2) / max(1, n_ps)))
         gamma_change_change = gamma_change_rms - gamma_change_save

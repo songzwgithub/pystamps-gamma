@@ -295,13 +295,11 @@ def _stage_config(
                 patch_name,
                 backend,
             )
+        # Only numerical Stage-2 choices belong in scientific provenance.
+        # Worker/thread/checkpoint settings are execution-only.
         config["stage2"] = {
-            "runtime_backend": runtime.backend,
             "kernel_backend": backend,
             "kernel_backend_overrides": runtime.kernel_backend_overrides,
-            "native_threads": runtime.stage2_native_threads,
-            "checkpoint_mode": runtime.stage2_checkpoint_mode,
-            "checkpoint_interval": runtime.stage2_checkpoint_interval,
         }
 
     if stage_id == 6:
@@ -409,6 +407,28 @@ def build_stage_signature(
     return payload
 
 
+def _normalize_stage2_provenance_for_compare(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    # JSON round-trip provides a compact deep copy.
+    normalized = json.loads(json.dumps(payload))
+
+    if int(normalized.get("stage_id", -1)) != 2:
+        return normalized
+
+    stage2 = normalized.get("config", {}).get("stage2")
+    if isinstance(stage2, dict):
+        for key in (
+            "runtime_backend",
+            "native_threads",
+            "checkpoint_mode",
+            "checkpoint_interval",
+        ):
+            stage2.pop(key, None)
+
+    return normalized
+
+
 def stage_marker_is_current(
     target_dir: Path,
     stage_id: int,
@@ -432,6 +452,12 @@ def stage_marker_is_current(
         )
     except Exception:
         return False
+
+    if int(current.get("stage_id", -1)) == 2:
+        return (
+            _normalize_stage2_provenance_for_compare(saved)
+            == _normalize_stage2_provenance_for_compare(current)
+        )
 
     return saved == current
 
