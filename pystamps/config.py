@@ -40,6 +40,16 @@ class RuntimeConfig:
     stage2_patch_backend_overrides: dict[str, str] = field(default_factory=dict)
     kernel_backend_overrides: dict[str, str] = field(default_factory=dict)
     stage2_native_threads: int = 0
+
+    # Stage-1 GAMMA RSLC-SB candidate extraction.
+    # 0 means automatic selection based on host CPU count.
+    stage1_rslc_da_backend: str = "native"
+    stage1_da_workers: int = 0
+    stage1_da_native_threads: int = 0
+    stage1_da_native_chunk_pixels: int = 131_072
+    stage1_rslc_ml_block_rows: int = 128
+    stage1_rslc_calamp_block_rows: int = 512
+
     stage7_chunk_ps: int = 100_000
     stage8_chunk_edges: int = 200_000
     enable_mat_stage_cache: bool = True

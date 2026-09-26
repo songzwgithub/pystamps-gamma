@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import os
 from pathlib import Path
 import time
@@ -29,6 +30,178 @@ def _fmt_time(seconds: float) -> str:
 
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+
+
+def _atomic_save_npz(
+    path: Path,
+    **arrays,
+) -> None:
+    # Atomic checkpoint write: interrupted writes are never reused.
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    tmp = path.with_name(
+        path.name + ".tmp"
+    )
+    with tmp.open("wb") as stream:
+        np.savez(
+            stream,
+            **arrays,
+        )
+        stream.flush()
+        os.fsync(
+            stream.fileno()
+        )
+    os.replace(
+        tmp,
+        path,
+    )
+
+
+def _resolve_rslc_da_native_kernel():
+    backend = os.environ.get(
+        "PYSTAMPS_RSLC_DA_BACKEND",
+        "native",
+    ).strip().lower()
+
+    if backend in {"numpy", "python", "legacy"}:
+        return None
+
+    try:
+        from pystamps.kernels import (
+            _stage2_native as native,
+        )
+    except Exception as exc:
+        warnings.warn(
+            "RSLC D_A native backend unavailable; "
+            f"falling back to NumPy: {exc}",
+            RuntimeWarning,
+        )
+        return None
+
+    kernel = getattr(
+        native,
+        "rslc_sbas_da_accumulate",
+        None,
+    )
+    if callable(kernel):
+        return kernel
+
+    warnings.warn(
+        "Installed native extension does not expose "
+        "rslc_sbas_da_accumulate; falling back to NumPy",
+        RuntimeWarning,
+    )
+    return None
+
+
+def _rslc_da_accumulate(
+    stack: np.ndarray,
+    master_indices: np.ndarray,
+    slave_indices: np.ndarray,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    str,
+    float,
+]:
+    started = time.monotonic()
+    kernel = _resolve_rslc_da_native_kernel()
+
+    if kernel is not None:
+        native_threads = int(
+            os.environ.get(
+                "PYSTAMPS_DA_NATIVE_THREADS",
+                str(max(1, os.cpu_count() or 1)),
+            )
+        )
+        if native_threads <= 0:
+            native_threads = max(1, os.cpu_count() or 1)
+
+        chunk_pixels = max(
+            16_384,
+            int(
+                os.environ.get(
+                    "PYSTAMPS_DA_NATIVE_CHUNK_PIXELS",
+                    "131072",
+                )
+            ),
+        )
+
+        payload = kernel(
+            np.ascontiguousarray(
+                stack,
+                dtype=np.float32,
+            ),
+            np.ascontiguousarray(
+                master_indices,
+                dtype=np.int32,
+            ),
+            np.ascontiguousarray(
+                slave_indices,
+                dtype=np.int32,
+            ),
+            native_threads,
+            chunk_pixels,
+        )
+
+        return (
+            np.asarray(payload["sum_amplitude"], dtype=np.float64),
+            np.asarray(payload["sum_difference_sq"], dtype=np.float64),
+            np.asarray(payload["valid_edge_count"], dtype=np.int32),
+            f"native[threads={native_threads},chunk={chunk_pixels}]",
+            time.monotonic() - started,
+        )
+
+    single_pixel_count = int(stack.shape[1])
+    sum_amplitude = np.zeros(single_pixel_count, dtype=np.float64)
+    sum_difference_sq = np.zeros(single_pixel_count, dtype=np.float64)
+    valid_edge_count = np.zeros(single_pixel_count, dtype=np.int32)
+
+    for edge_index in range(int(master_indices.size)):
+        master = stack[
+            master_indices[edge_index],
+            :,
+        ].astype(np.float64, copy=False)
+
+        slave = stack[
+            slave_indices[edge_index],
+            :,
+        ].astype(np.float64, copy=False)
+
+        valid_edge = (
+            np.isfinite(master)
+            & np.isfinite(slave)
+            & (master > 0.0)
+            & (slave > 0.0)
+        )
+
+        if np.any(valid_edge):
+            sum_amplitude[valid_edge] += (
+                master[valid_edge]
+                + slave[valid_edge]
+            )
+
+            difference = (
+                master[valid_edge]
+                - slave[valid_edge]
+            )
+
+            sum_difference_sq[valid_edge] += (
+                difference
+                * difference
+            )
+            valid_edge_count[valid_edge] += 1
+
+    return (
+        sum_amplitude,
+        sum_difference_sq,
+        valid_edge_count,
+        "numpy-legacy",
+        time.monotonic() - started,
+    )
 
 def _read_rslc_amplitude(
     rslc: Path,
@@ -130,6 +303,8 @@ def extract_candidates_from_project_rslc_sbas(
     row_stop: int | None = None,
     range_looks: int | None = None,
     azimuth_looks: int | None = None,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_tag: str | None = None,
 ) -> CandidateResult:
     """
     StaMPS SB candidate selection from original complex RSLC amplitudes,
@@ -293,7 +468,7 @@ def extract_candidates_from_project_rslc_sbas(
 
     if range_remainder >= range_looks:
         raise GammaInputError(
-            "RSLC与4:1多视IFG宽度关系异常："
+            f"RSLC与{range_looks}x{azimuth_looks}多视IFG宽度关系异常："
             f"full={full_width}, ml={ml_width}, "
             f"range_looks={range_looks}"
         )
@@ -343,15 +518,26 @@ def extract_candidates_from_project_rslc_sbas(
             "SBAS网络RSLC索引越界"
         )
 
+    workers_requested = int(
+        os.environ.get(
+            "PYSTAMPS_DA_WORKERS",
+            "0",
+        )
+    )
+
+    if workers_requested <= 0:
+        workers_requested = min(
+            16,
+            max(
+                1,
+                os.cpu_count() or 1,
+            ),
+        )
+
     workers = max(
         1,
         min(
-            int(
-                os.environ.get(
-                    "PYSTAMPS_DA_WORKERS",
-                    "8",
-                )
-            ),
+            workers_requested,
             n_images,
         ),
     )
@@ -361,7 +547,7 @@ def extract_candidates_from_project_rslc_sbas(
         int(
             os.environ.get(
                 "PYSTAMPS_RSLC_ML_BLOCK_ROWS",
-                "64",
+                "128",
             )
         ),
     )
@@ -371,9 +557,43 @@ def extract_candidates_from_project_rslc_sbas(
         int(
             os.environ.get(
                 "PYSTAMPS_RSLC_CALAMP_BLOCK_ROWS",
-                "256",
+                "512",
             )
         ),
+    )
+
+    checkpoint_root: Path | None = None
+
+    if checkpoint_dir is not None:
+        checkpoint_tag_value = (
+            str(checkpoint_tag)
+            if checkpoint_tag is not None
+            else "untagged"
+        )
+        checkpoint_key = hashlib.sha256(
+            checkpoint_tag_value.encode("utf-8")
+        ).hexdigest()[:20]
+
+        checkpoint_root = (
+            Path(checkpoint_dir)
+            .expanduser()
+            .resolve()
+            / "rslc_da_blocks_v1"
+            / checkpoint_key
+        )
+        checkpoint_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        print(
+            "[resume] RSLC-D_A block checkpoint: "
+            f"{checkpoint_root}",
+            flush=True,
+        )
+
+    multilook_label = (
+        f"{range_looks}x{azimuth_looks}"
     )
 
     print()
@@ -388,7 +608,7 @@ def extract_candidates_from_project_rslc_sbas(
         flush=True,
     )
     print(
-        f"4:1 IFG尺寸             : {ml_length} x {ml_width}",
+        f"{multilook_label} IFG尺寸        : {ml_length} x {ml_width}",
         flush=True,
     )
     print(
@@ -447,6 +667,52 @@ def extract_candidates_from_project_rslc_sbas(
         dtype=np.float64,
     )
 
+    calamp_checkpoint_file = (
+        checkpoint_root / "calamp_scales.npz"
+        if checkpoint_root is not None
+        else None
+    )
+
+    calamp_cache_loaded = False
+
+    if (
+        calamp_checkpoint_file is not None
+        and calamp_checkpoint_file.is_file()
+    ):
+        try:
+            with np.load(
+                calamp_checkpoint_file,
+                allow_pickle=False,
+            ) as cached:
+                cached_scales = np.asarray(
+                    cached["scales"],
+                    dtype=np.float64,
+                )
+
+            if (
+                cached_scales.shape == (n_images,)
+                and np.all(np.isfinite(cached_scales))
+                and np.all(cached_scales > 0)
+            ):
+                scales[:] = cached_scales
+                calamp_cache_loaded = True
+                print(
+                    "[resume] 复用RSLC calamp scales："
+                    f"{calamp_checkpoint_file}",
+                    flush=True,
+                )
+            else:
+                raise ValueError(
+                    "calamp checkpoint has invalid shape/values"
+                )
+
+        except Exception as exc:
+            warnings.warn(
+                "Ignoring invalid calamp checkpoint "
+                f"{calamp_checkpoint_file}: {exc}",
+                RuntimeWarning,
+            )
+
     scale_started = time.monotonic()
 
     def scale_job(
@@ -475,61 +741,62 @@ def extract_candidates_from_project_rslc_sbas(
             value,
         )
 
-    with ThreadPoolExecutor(
-        max_workers=workers,
-        thread_name_prefix="rslc-calamp",
-    ) as executor:
-        futures = [
-            executor.submit(
-                scale_job,
-                image_index,
-            )
-            for image_index
-            in range(n_images)
-        ]
+    if not calamp_cache_loaded:
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="rslc-calamp",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    scale_job,
+                    image_index,
+                )
+                for image_index
+                in range(n_images)
+            ]
 
-        for completed, future in enumerate(
-            futures,
-            start=1,
-        ):
-            image_index, value = (
-                future.result()
-            )
-
-            scales[
-                image_index
-            ] = value
-
-            if (
-                completed == 1
-                or completed % 8 == 0
-                or completed == n_images
+            for completed, future in enumerate(
+                futures,
+                start=1,
             ):
-                elapsed = (
-                    time.monotonic()
-                    - scale_started
+                image_index, value = (
+                    future.result()
                 )
 
-                rate = (
-                    completed / elapsed
-                    if elapsed > 0
-                    else 0.0
-                )
+                scales[
+                    image_index
+                ] = value
 
-                eta = (
-                    (n_images - completed) / rate
-                    if rate > 0
-                    else np.nan
-                )
+                if (
+                    completed == 1
+                    or completed % 8 == 0
+                    or completed == n_images
+                ):
+                    elapsed = (
+                        time.monotonic()
+                        - scale_started
+                    )
 
-                print(
-                    "[calamp-RSLC] "
-                    f"{completed}/{n_images} "
-                    f"({completed/n_images*100:6.2f}%) | "
-                    f"elapsed={_fmt_time(elapsed)} | "
-                    f"ETA={_fmt_time(eta)}",
-                    flush=True,
-                )
+                    rate = (
+                        completed / elapsed
+                        if elapsed > 0
+                        else 0.0
+                    )
+
+                    eta = (
+                        (n_images - completed) / rate
+                        if rate > 0
+                        else np.nan
+                    )
+
+                    print(
+                        "[calamp-RSLC] "
+                        f"{completed}/{n_images} "
+                        f"({completed/n_images*100:6.2f}%) | "
+                        f"elapsed={_fmt_time(elapsed)} | "
+                        f"ETA={_fmt_time(eta)}",
+                        flush=True,
+                    )
 
     if (
         np.any(~np.isfinite(scales))
@@ -537,6 +804,23 @@ def extract_candidates_from_project_rslc_sbas(
     ):
         raise GammaInputError(
             "RSLC幅度标定系数存在无效值"
+        )
+
+    if (
+        not calamp_cache_loaded
+        and calamp_checkpoint_file is not None
+    ):
+        _atomic_save_npz(
+            calamp_checkpoint_file,
+            scales=scales.astype(
+                np.float64,
+                copy=False,
+            ),
+        )
+        print(
+            "[resume] 已写入RSLC calamp checkpoint："
+            f"{calamp_checkpoint_file}",
+            flush=True,
         )
 
     print(
@@ -554,7 +838,7 @@ def extract_candidates_from_project_rslc_sbas(
     print()
     print(
         "[RSLC-D_A] Step 2/2："
-        "single-look selsbc统计并映射到4:1网格",
+        f"single-look selsbc统计并映射到{multilook_label}网格",
         flush=True,
     )
 
@@ -617,6 +901,99 @@ def extract_candidates_from_project_rslc_sbas(
                 ml_ny
                 * azimuth_looks
             )
+
+            checkpoint_file: Path | None = None
+
+            if checkpoint_root is not None:
+                checkpoint_file = (
+                    checkpoint_root
+                    / (
+                        f"block_{block_index:04d}_"
+                        f"{ml_y0}_{ml_y1}.npz"
+                    )
+                )
+
+                if checkpoint_file.is_file():
+                    try:
+                        with np.load(
+                            checkpoint_file,
+                            allow_pickle=False,
+                        ) as cached:
+                            cached_y0 = int(
+                                np.asarray(cached["ml_y0"]).reshape(-1)[0]
+                            )
+                            cached_y1 = int(
+                                np.asarray(cached["ml_y1"]).reshape(-1)[0]
+                            )
+                            cached_single_count = int(
+                                np.asarray(
+                                    cached["single_candidate_count"]
+                                ).reshape(-1)[0]
+                            )
+                            cached_rows = np.asarray(
+                                cached["rows"],
+                                dtype=np.int32,
+                            )
+                            cached_cols = np.asarray(
+                                cached["cols"],
+                                dtype=np.int32,
+                            )
+                            cached_da = np.asarray(
+                                cached["amplitude_dispersion"],
+                                dtype=np.float32,
+                            )
+                            cached_mean = np.asarray(
+                                cached["mean_amplitude"],
+                                dtype=np.float32,
+                            )
+                            cached_valid = np.asarray(
+                                cached["valid_fraction"],
+                                dtype=np.float32,
+                            )
+
+                        cached_lengths = {
+                            cached_rows.size,
+                            cached_cols.size,
+                            cached_da.size,
+                            cached_mean.size,
+                            cached_valid.size,
+                        }
+
+                        if (
+                            cached_y0 != ml_y0
+                            or cached_y1 != ml_y1
+                            or len(cached_lengths) != 1
+                        ):
+                            raise ValueError(
+                                "checkpoint metadata/array length mismatch"
+                            )
+
+                        cumulative_single_candidates += cached_single_count
+                        cumulative_ml_candidates += int(cached_rows.size)
+
+                        if cached_rows.size:
+                            selected_rows.append(cached_rows)
+                            selected_cols.append(cached_cols)
+                            selected_da.append(cached_da)
+                            selected_mean.append(cached_mean)
+                            selected_valid_fraction.append(cached_valid)
+
+                        print()
+                        print(
+                            "[resume] RSLC-D_A "
+                            f"Block {block_index}/{n_blocks} 从断点恢复 | "
+                            f"4:1候选={cached_rows.size:,} | "
+                            f"累计4:1={cumulative_ml_candidates:,}",
+                            flush=True,
+                        )
+                        continue
+
+                    except Exception as exc:
+                        warnings.warn(
+                            "Ignoring invalid RSLC-D_A checkpoint "
+                            f"{checkpoint_file}: {exc}",
+                            RuntimeWarning,
+                        )
 
             full_block_width = (
                 required_full_width
@@ -729,82 +1106,24 @@ def extract_candidates_from_project_rslc_sbas(
                     flush=True,
                 )
 
-            sum_amplitude = np.zeros(
-                single_pixel_count,
-                dtype=np.float64,
+            (
+                sum_amplitude,
+                sum_difference_sq,
+                valid_edge_count,
+                backend_label,
+                da_compute_seconds,
+            ) = _rslc_da_accumulate(
+                stack,
+                master_indices,
+                slave_indices,
             )
 
-            sum_difference_sq = np.zeros(
-                single_pixel_count,
-                dtype=np.float64,
+            print(
+                "[RSLC-D_A] "
+                f"accumulator={backend_label} | "
+                f"time={_fmt_time(da_compute_seconds)}",
+                flush=True,
             )
-
-            valid_edge_count = np.zeros(
-                single_pixel_count,
-                dtype=np.int32,
-            )
-
-            for edge_index in range(
-                n_edges
-            ):
-                master = (
-                    stack[
-                        master_indices[
-                            edge_index
-                        ],
-                        :,
-                    ].astype(
-                        np.float64,
-                        copy=False,
-                    )
-                )
-
-                slave = (
-                    stack[
-                        slave_indices[
-                            edge_index
-                        ],
-                        :,
-                    ].astype(
-                        np.float64,
-                        copy=False,
-                    )
-                )
-
-                valid_edge = (
-                    np.isfinite(master)
-                    & np.isfinite(slave)
-                    & (master > 0.0)
-                    & (slave > 0.0)
-                )
-
-                if np.any(valid_edge):
-                    sum_amplitude[valid_edge] += (
-                        master[valid_edge]
-                        + slave[valid_edge]
-                    )
-
-                    difference = (
-                        master[valid_edge]
-                        - slave[valid_edge]
-                    )
-
-                    sum_difference_sq[valid_edge] += (
-                        difference
-                        * difference
-                    )
-
-                    valid_edge_count[valid_edge] += 1
-
-                if (
-                    (edge_index + 1) % 50 == 0
-                    or edge_index + 1 == n_edges
-                ):
-                    print(
-                        "[RSLC-D_A] "
-                        f"pair={edge_index+1}/{n_edges}",
-                        flush=True,
-                    )
 
             del stack
 
@@ -1038,6 +1357,34 @@ def extract_candidates_from_project_rslc_sbas(
                 ml_candidate_count
             )
 
+            if checkpoint_file is not None:
+                _atomic_save_npz(
+                    checkpoint_file,
+                    ml_y0=np.asarray([ml_y0], dtype=np.int32),
+                    ml_y1=np.asarray([ml_y1], dtype=np.int32),
+                    single_candidate_count=np.asarray(
+                        [single_candidate_count],
+                        dtype=np.int64,
+                    ),
+                    rows=(
+                        local_rows
+                        + ml_y0
+                    ).astype(np.int32),
+                    cols=local_cols.astype(np.int32),
+                    amplitude_dispersion=da_ml[
+                        local_rows,
+                        local_cols,
+                    ].astype(np.float32),
+                    mean_amplitude=mean_ml[
+                        local_rows,
+                        local_cols,
+                    ].astype(np.float32),
+                    valid_fraction=valid_fraction_ml[
+                        local_rows,
+                        local_cols,
+                    ].astype(np.float32),
+                )
+
             elapsed = (
                 time.monotonic()
                 - process_started
@@ -1048,9 +1395,9 @@ def extract_candidates_from_project_rslc_sbas(
                 f"Block {block_index}/{n_blocks} 完成 | "
                 f"single-look候选="
                 f"{single_candidate_count:,} | "
-                f"4:1映射候选="
+                f"{multilook_label}映射候选="
                 f"{ml_candidate_count:,} | "
-                f"累计4:1="
+                f"累计{multilook_label}="
                 f"{cumulative_ml_candidates:,} | "
                 f"elapsed={_fmt_time(elapsed)}",
                 flush=True,
@@ -1118,7 +1465,7 @@ def extract_candidates_from_project_rslc_sbas(
         flush=True,
     )
     print(
-        f"映射后4:1候选           : "
+        f"映射后{multilook_label}候选      : "
         f"{cumulative_ml_candidates:,}",
         flush=True,
     )

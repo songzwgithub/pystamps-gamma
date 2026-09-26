@@ -2440,9 +2440,188 @@ fn stage8_edge_noise<'py>(
     Ok(dict)
 }
 
+
+#[pyfunction]
+fn rslc_sbas_da_accumulate<'py>(
+    py: Python<'py>,
+    stack: PyReadonlyArray2<f32>,
+    master_indices: PyReadonlyArray1<i32>,
+    slave_indices: PyReadonlyArray1<i32>,
+    threads: usize,
+    chunk_pixels: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let stack_view = stack.as_array();
+    let master_view = master_indices.as_array();
+    let slave_view = slave_indices.as_array();
+
+    if stack_view.ndim() != 2 {
+        return Err(PyValueError::new_err(
+            "stack must be a 2-D C-contiguous float32 matrix",
+        ));
+    }
+    if master_view.len() != slave_view.len() {
+        return Err(PyValueError::new_err(
+            "master_indices and slave_indices must have matching lengths",
+        ));
+    }
+
+    let stack_slice = stack_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("stack must be C-contiguous"))?;
+    let master_slice = master_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("master_indices must be contiguous"))?;
+    let slave_slice = slave_view
+        .as_slice()
+        .ok_or_else(|| PyValueError::new_err("slave_indices must be contiguous"))?;
+
+    let n_images = stack_view.shape()[0];
+    let n_pixels = stack_view.shape()[1];
+    let n_edges = master_slice.len();
+
+    if n_images == 0 || n_pixels == 0 {
+        return Err(PyValueError::new_err(
+            "stack must contain at least one image and one pixel",
+        ));
+    }
+    if n_edges == 0 {
+        return Err(PyValueError::new_err(
+            "at least one SBAS edge is required",
+        ));
+    }
+
+    let mut masters = Vec::with_capacity(n_edges);
+    let mut slaves = Vec::with_capacity(n_edges);
+
+    for edge_ix in 0..n_edges {
+        let master = master_slice[edge_ix];
+        let slave = slave_slice[edge_ix];
+
+        if master < 0 || slave < 0 {
+            return Err(PyValueError::new_err(
+                "SBAS edge indices must be non-negative",
+            ));
+        }
+
+        let master = master as usize;
+        let slave = slave as usize;
+
+        if master >= n_images || slave >= n_images {
+            return Err(PyValueError::new_err(format!(
+                "SBAS edge {edge_ix} references image outside stack: {master}/{slave} >= {n_images}"
+            )));
+        }
+
+        masters.push(master);
+        slaves.push(slave);
+    }
+
+    let requested_threads = if threads == 0 {
+        std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(1)
+    } else {
+        threads
+    }
+    .max(1);
+
+    let chunk_pixels = if chunk_pixels == 0 {
+        131_072
+    } else {
+        chunk_pixels
+    }
+    .max(16_384)
+    .min(n_pixels);
+
+    let ranges: Vec<(usize, usize)> = (0..n_pixels)
+        .step_by(chunk_pixels)
+        .map(|start| (start, (start + chunk_pixels).min(n_pixels)))
+        .collect();
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(requested_threads)
+        .build()
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to build RSLC D_A thread pool: {err}"
+            ))
+        })?;
+
+    let blocks = py.detach(move || {
+        pool.install(|| {
+            ranges
+                .par_iter()
+                .map(|&(start, end)| {
+                    let len = end - start;
+                    let mut sum_amplitude = vec![0.0_f64; len];
+                    let mut sum_difference_sq = vec![0.0_f64; len];
+                    let mut valid_edge_count = vec![0_i32; len];
+
+                    for edge_ix in 0..n_edges {
+                        let master_base = masters[edge_ix] * n_pixels + start;
+                        let slave_base = slaves[edge_ix] * n_pixels + start;
+
+                        for local_ix in 0..len {
+                            let master = stack_slice[master_base + local_ix];
+                            let slave = stack_slice[slave_base + local_ix];
+
+                            if master.is_finite()
+                                && slave.is_finite()
+                                && master > 0.0
+                                && slave > 0.0
+                            {
+                                let master64 = master as f64;
+                                let slave64 = slave as f64;
+                                sum_amplitude[local_ix] += master64 + slave64;
+                                let difference = master64 - slave64;
+                                sum_difference_sq[local_ix] += difference * difference;
+                                valid_edge_count[local_ix] += 1;
+                            }
+                        }
+                    }
+
+                    (
+                        start,
+                        sum_amplitude,
+                        sum_difference_sq,
+                        valid_edge_count,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+
+    let mut sum_amplitude = vec![0.0_f64; n_pixels];
+    let mut sum_difference_sq = vec![0.0_f64; n_pixels];
+    let mut valid_edge_count = vec![0_i32; n_pixels];
+
+    for (start, block_sum, block_diff, block_count) in blocks {
+        let end = start + block_sum.len();
+        sum_amplitude[start..end].copy_from_slice(&block_sum);
+        sum_difference_sq[start..end].copy_from_slice(&block_diff);
+        valid_edge_count[start..end].copy_from_slice(&block_count);
+    }
+
+    let dict = PyDict::new(py);
+    dict.set_item(
+        "sum_amplitude",
+        Array1::from_vec(sum_amplitude).into_pyarray(py),
+    )?;
+    dict.set_item(
+        "sum_difference_sq",
+        Array1::from_vec(sum_difference_sq).into_pyarray(py),
+    )?;
+    dict.set_item(
+        "valid_edge_count",
+        Array1::from_vec(valid_edge_count).into_pyarray(py),
+    )?;
+    Ok(dict)
+}
+
 #[pymodule]
 fn _stage2_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(accumulate_weighted_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(rslc_sbas_da_accumulate, m)?)?;
     m.add_function(wrap_pyfunction!(ps_topofit_batch_generic, m)?)?;
     m.add_function(wrap_pyfunction!(ps_topofit_batch_generic_f32, m)?)?;
     m.add_function(wrap_pyfunction!(ps_topofit_batch_row_invariant, m)?)?;

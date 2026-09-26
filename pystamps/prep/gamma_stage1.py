@@ -1297,6 +1297,8 @@ def prepare_gamma_sbas_stage1(
                 row_stop=config.candidate_row_stop,
                 range_looks=resolved_range_looks,
                 azimuth_looks=resolved_azimuth_looks,
+                checkpoint_dir=candidate_cache_directory,
+                checkpoint_tag=expected_cache_tag,
             )
         else:
             candidates = extract_candidates_from_project(

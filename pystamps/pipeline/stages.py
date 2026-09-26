@@ -201,8 +201,45 @@ def ensure_stage1_dataset(context: PipelineContext) -> DatasetLayout:
         force=False,
     )
 
-    old_resume = os.environ.get("PYSTAMPS_STAGE1_RESUME")
-    os.environ["PYSTAMPS_STAGE1_RESUME"] = "1"
+    runtime = context.run_config.runtime
+
+    stage1_env = {
+        "PYSTAMPS_STAGE1_RESUME": "1",
+        "PYSTAMPS_RSLC_DA_BACKEND": str(
+            runtime.stage1_rslc_da_backend
+        ),
+        "PYSTAMPS_DA_WORKERS": str(
+            int(runtime.stage1_da_workers)
+        ),
+        "PYSTAMPS_DA_NATIVE_THREADS": str(
+            int(runtime.stage1_da_native_threads)
+        ),
+        "PYSTAMPS_DA_NATIVE_CHUNK_PIXELS": str(
+            int(runtime.stage1_da_native_chunk_pixels)
+        ),
+        "PYSTAMPS_RSLC_ML_BLOCK_ROWS": str(
+            int(runtime.stage1_rslc_ml_block_rows)
+        ),
+        "PYSTAMPS_RSLC_CALAMP_BLOCK_ROWS": str(
+            int(runtime.stage1_rslc_calamp_block_rows)
+        ),
+    }
+
+    old_stage1_env = {
+        key: os.environ.get(key)
+        for key in stage1_env
+    }
+
+    os.environ.update(stage1_env)
+
+    print(
+        "[STAGE1] RSLC-D_A backend="
+        f"{runtime.stage1_rslc_da_backend}, "
+        f"io_workers={runtime.stage1_da_workers or 'auto'}, "
+        f"native_threads={runtime.stage1_da_native_threads or 'auto'}, "
+        f"block_rows={runtime.stage1_rslc_ml_block_rows}",
+        flush=True,
+    )
 
     try:
         prepare_gamma_sbas_stage1(
@@ -215,10 +252,11 @@ def ensure_stage1_dataset(context: PipelineContext) -> DatasetLayout:
             f"Automatic GAMMA Stage-1 preparation failed: {exc}"
         ) from exc
     finally:
-        if old_resume is None:
-            os.environ.pop("PYSTAMPS_STAGE1_RESUME", None)
-        else:
-            os.environ["PYSTAMPS_STAGE1_RESUME"] = old_resume
+        for key, old_value in old_stage1_env.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
     dataset = discover_dataset(context.dataset_root)
 

@@ -37,6 +37,17 @@ runtime:
   cpu_workers: 0
   stage2_kernel_backend: native
   stage2_native_threads: 0
+
+  # Stage-1 RSLC-SB candidate extraction.
+  # 0 = auto. Native D_A uses all available CPUs; RSLC readers are capped
+  # automatically by the implementation when stage1_da_workers is 0.
+  stage1_rslc_da_backend: native
+  stage1_da_workers: 0
+  stage1_da_native_threads: 0
+  stage1_da_native_chunk_pixels: 131072
+  stage1_rslc_ml_block_rows: 128
+  stage1_rslc_calamp_block_rows: 512
+
   stage2_checkpoint_mode: final
   stage2_checkpoint_interval: 1
   stage2_debug: false
