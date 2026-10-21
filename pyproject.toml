@@ -34,6 +34,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+kriging = ["pyamg>=5.2"]
 gpu = ["cupy-cuda12x>=13.0"]
 dev = [
   "build>=1.2",

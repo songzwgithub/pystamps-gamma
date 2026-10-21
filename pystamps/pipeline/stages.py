@@ -394,10 +394,50 @@ def _write_phase_input_marker(
     tmp.replace(marker)
 
 
+def _stage78_scn_kriging_enabled(
+    dataset_root: Path,
+) -> bool:
+    """Return the canonical StaMPS scn_kriging_flag from parms.mat."""
+    parms = Path(dataset_root) / "parms.mat"
+    if not parms.is_file():
+        return False
+    try:
+        from pystamps.io.mat import read_mat_variables
+        import numpy as np
+
+        payload = read_mat_variables(parms, ("scn_kriging_flag",))
+        raw = payload.get("scn_kriging_flag", "n")
+        arr = np.asarray(raw)
+        if arr.size == 0:
+            return False
+        if arr.dtype.kind in {"U", "S"}:
+            value = "".join(str(v) for v in arr.reshape(-1)).strip()
+        else:
+            value = str(arr.reshape(-1)[0]).strip()
+        return value.lower() == "y"
+    except Exception:
+        return False
+
+
 def _resolve_stage78_phase_file(
     dataset_root: Path,
     context: PipelineContext,
 ) -> str:
+
+    # Official StaMPS ps_scn_filt_krig uses original acquisition phase
+    # and implements its own all-epoch spatial deramp.
+    if _stage78_scn_kriging_enabled(dataset_root):
+        if bool(context.run_config.gacos.enabled):
+            raise StageExecutionError(
+                "scn_kriging_flag='y' requires gacos.enabled=false "
+                "for the StaMPS-parity branch"
+            )
+        if bool(context.run_config.post_unwrap_deramp.enabled):
+            raise StageExecutionError(
+                "scn_kriging_flag='y' requires post_unwrap_deramp.enabled=false"
+            )
+        context.stage78_phase_file = "phuw2.mat"
+        return context.stage78_phase_file
 
     # Stage 7 and Stage 8 in one pipeline invocation must use
     # the exact same materialized phase product.

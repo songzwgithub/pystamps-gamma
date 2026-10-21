@@ -749,3 +749,13 @@ Important interpretation points:
 ## 16. Citation
 
 If pySTAMPS-GAMMA is used in scientific work, cite this repository together with the relevant StaMPS, GAMMA, SNAPHU and atmospheric-correction references.
+
+
+## StaMPS Stage-7/Stage-8 kriging production path
+
+For the GAMMA SBAS `ps_calc_scla` parity sequence and the verified
+**exact all-PS local spatial kriging** branch of `ps_scn_filt_krig`, see
+[StaMPS-parity production workflow](docs/STAMPS_PARITY_PRODUCTION.md).
+For kriging-enabled installations, use `python -m pip install '.[kriging]'`.
+The older non-kriging Stage-8 mode is retained when
+`scn_kriging_flag='n'`.

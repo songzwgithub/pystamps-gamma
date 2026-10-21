@@ -99,6 +99,8 @@ class GammaStage1Config:
     sbas_deramp_huber_delta: float = 1.345
     sbas_deramp_huber_iterations: int = 5
     sbas_stage8_use_scla: bool = False
+    # Canonical StaMPS Stage-8 mode switch: 'y' uses kriging.
+    scn_kriging_flag: str = "n"
     scn_time_win: float = 365.0
     scn_wavelength: float = 100.0
 
@@ -160,6 +162,9 @@ class GammaStage1Config:
             raise ValueError(
                 "candidate_source must be 'rslc_sbas' or 'mli'"
             )
+
+        if str(self.scn_kriging_flag).strip().lower() not in {"y", "n"}:
+            raise ValueError("scn_kriging_flag must be 'y' or 'n'")
 
         ref_values = (
             self.reference_lon,
@@ -389,6 +394,7 @@ def _write_root_metadata(
     parameters["sbas_deramp_huber_delta"] = float(config.sbas_deramp_huber_delta)
     parameters["sbas_deramp_huber_iterations"] = int(config.sbas_deramp_huber_iterations)
     parameters["sbas_stage8_use_scla"] = ("y" if config.sbas_stage8_use_scla else "n")
+    parameters["scn_kriging_flag"] = str(config.scn_kriging_flag).strip().lower()
     parameters["scn_time_win"] = float(config.scn_time_win)
     parameters["scn_wavelength"] = float(config.scn_wavelength)
 

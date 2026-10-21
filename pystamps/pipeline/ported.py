@@ -11081,6 +11081,36 @@ def stage8_filter_scn(
     phase_file: str = "phuw2.mat",
 ) -> str:
     if _stage78_dataset_is_sbas(dataset_root):
+        parms_payload = read_mat_variables(
+            Path(dataset_root) / "parms.mat",
+            ("scn_kriging_flag",),
+        )
+        use_kriging = (
+            _mat_text(
+                parms_payload.get("scn_kriging_flag", "n"),
+                "n",
+            ).lower()
+            == "y"
+        )
+
+        if use_kriging:
+            from pystamps.pipeline.stage8_sbas_krig import (
+                stage8_sbas_filter_scn_krig,
+            )
+
+            return stage8_sbas_filter_scn_krig(
+                dataset_root,
+                backend=backend,
+                chunk_edges=chunk_edges,
+                chunk_ps=chunk_ps,
+                enable_mat_cache=enable_mat_cache,
+                io_workers=io_workers,
+                mat_cache=mat_cache,
+                triangle_path=triangle_path,
+                snaphu_path=snaphu_path,
+                phase_file=phase_file,
+            )
+
         from pystamps.pipeline.stage8_sbas import stage8_sbas_filter_scn
 
         return stage8_sbas_filter_scn(

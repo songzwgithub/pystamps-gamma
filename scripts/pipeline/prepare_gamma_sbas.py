@@ -54,6 +54,11 @@ def main() -> None:
     ap.add_argument("--da-threshold", type=float, default=0.60)
     ap.add_argument("--min-valid-fraction", type=float, default=0.90)
     ap.add_argument("--candidate-source", choices=("rslc_sbas", "mli"), default="rslc_sbas")
+    ap.add_argument(
+        "--scn-kriging",
+        action="store_true",
+        help="write scn_kriging_flag='y' to dispatch StaMPS Stage-8 kriging",
+    )
 
     g = ap.add_argument_group("optional explicit geometry inputs")
     g.add_argument("--longitude-file", type=Path, default=None)
@@ -143,6 +148,7 @@ def main() -> None:
         range_looks=args.range_looks,
         azimuth_looks=args.azimuth_looks,
         sbas_deramp_mode="none",
+        scn_kriging_flag=("y" if args.scn_kriging else "n"),
         force=args.force,
     )
 
