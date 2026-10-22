@@ -320,8 +320,7 @@ def _create_schema(
             ?,
             'geom',
             'gpkg_rtree_index',
-            'http://www.geopackage.org/'
-            'spec/#extension_rtree',
+            'http://www.geopackage.org/spec/#extension_rtree',
             'write-only'
         )
         """,
